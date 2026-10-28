@@ -1,0 +1,22 @@
+{
+  "name": "games.rising.sh",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/risinghq/games.rising.sh.git"
+  },
+  "workspaces": [
+    "games/*",
+    "packages/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "lint": "oxfmt --check .",
+    "fix": "oxfmt .",
+    "check": "bun run lint && bun run --cwd games/battledrones check"
+  },
+  "devDependencies": {
+    "oxfmt": "^0.75.0",
+    "wrangler": "^4.155.0"
+  }
+}

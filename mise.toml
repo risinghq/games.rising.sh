@@ -1,0 +1,6 @@
+[tools]
+bun = "1.4.4"
+node = "26.12.1"
+
+[tasks.check]
+run = "bun run check"
