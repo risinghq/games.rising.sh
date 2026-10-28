@@ -1,0 +1,14 @@
+games.rising.sh
+Copyright 2026 Rising
+
+This repository contains software developed by others:
+
+Battle Drones (games/battledrones)
+  Author:  Simon Willison
+  Source:  https://github.com/simonw/battledrones
+  Commit:  ca4f13b36013e1980289046e731a295d2bf02a3e
+  Licence: Apache License 2.0 (games/battledrones/LICENSE)
+  Changes: the upstream workflows, package-lock.json, progress-shots/ and
+           research_notes/ are not copied. The repository changes are in git
+           history.
+           The package.json gains a `check` script.

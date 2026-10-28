@@ -1,0 +1,821 @@
+import { TICK_RATE, UNITS } from "../sim/balance";
+import type { BuildingKind, Faction, FxEvent, PerSide, PowerKind, UnitKind, World } from "../sim/types";
+import { buildingCenter, hqOf } from "../sim/world";
+import { CalldownCredit, powerName } from "./calldown-credit";
+import { SIDE_NAME } from "./side-style";
+import { FACTIONS, isMulti, otherSide, perSide, sidesOf } from "../sim/sides";
+
+/**
+ * The match chronicle: a render-side recorder (full information — it is
+ * only shown after the match) that samples army strength over time and logs
+ * deaths, so the after-action report can tell the story: first blood, the
+ * biggest battle, the turning point, the MVP unit and one tip.
+ *
+ * No three.js here: the analysis functions are pure and unit-tested.
+ */
+
+/** Sample every 5 s of game time. */
+export const SAMPLE_TICKS = 50;
+
+const other = otherSide;
+
+export interface Sample {
+  /** Game seconds. */
+  t: number;
+  /** Σ cost × hp/maxHp of each side's non-harvester units. */
+  army: PerSide<number>;
+  /** Scrap in the bank. */
+  bank: PerSide<number>;
+  harvesters: PerSide<number>;
+}
+
+export interface DeathRec {
+  t: number;
+  x: number;
+  y: number;
+  /** The victim's side. */
+  faction: Faction;
+  unitKind: UnitKind | null;
+  buildingKind: BuildingKind | null;
+  value: number;
+  killerKind: UnitKind | null;
+  /** Killed by a building (turret, SAM, HQ gun) rather than a unit. */
+  byBuilding: boolean;
+  /** Killed by a commander calldown (then not `byBuilding`), and which one (calldown id). */
+  power?: PowerKind | null;
+  strike?: number | null;
+  /** The killer's side (a duel's: the other side; a free-for-all's when it was known). */
+  by?: Faction | null;
+}
+
+/** A commander calldown and what it did (both sides; full information). */
+export interface StrikeRec {
+  id: number;
+  /** Game seconds when it was called. */
+  t: number;
+  faction: Faction;
+  power: PowerKind;
+  x: number;
+  y: number;
+  /** The target side's units under the reticle when it was called (what there was to dodge). */
+  exposed: number;
+  /** Units and buildings it hit when it landed (summed over a Barrage's shells; an EMP: what it froze). */
+  hits: number;
+  /** What it destroyed: units, buildings, their scrap value. */
+  units: number;
+  buildings: number;
+  value: number;
+}
+
+export interface HeroRec {
+  id: number;
+  faction: Faction;
+  kind: UnitKind;
+  kills: number;
+  rank: number;
+  alive: boolean;
+  /** Game seconds at death, or null if it survived. */
+  diedAt: number | null;
+}
+
+/**
+ * A story beat: first blood, the biggest battle, the turning point (or the
+ * moment one side pulled away), the first Goliath to walk off a Gantry, an
+ * HQ that fell while its Goliath fought on (GOLIATH.md: the match goes on),
+ * and Robot Love's ending, two Goliaths falling in love (a draw).
+ */
+export type MomentKind = "first-blood" | "battle" | "turn" | "lead" | "goliath" | "hq" | "love";
+
+export interface Moment {
+  kind: MomentKind;
+  /** Game seconds. */
+  t: number;
+  title: string;
+  text: string;
+  /** Who the moment favours from the reader's point of view (colours the row). */
+  tone: "good" | "bad" | "neutral";
+}
+
+/** Where on the map something happened, in words. */
+export interface MapRefs {
+  width: number;
+  height: number;
+  hq: Partial<Record<Faction, { x: number; y: number }>>;
+}
+
+// ------------------------------------------------------------- recorder ---
+
+/** A chronicle's record at one moment (Chronicle.snapshot), to put back when a replay's seek rewinds the world. */
+export interface ChronicleSnapshot {
+  samples: Sample[];
+  deaths: DeathRec[];
+  strikes: StrikeRec[];
+  built: Record<Faction, Record<string, number>>;
+  firstBuilt: Record<Faction, Record<string, number>>;
+  factories: Record<Faction, { total: number; idleRich: number }>;
+  out: { faction: Faction; t: number; by: Faction | null }[];
+  love: { t: number; x: number; y: number } | null;
+  fallen: Record<Faction, HeroRec | null>;
+  finished: boolean;
+}
+
+export class Chronicle {
+  readonly samples: Sample[] = [];
+  readonly deaths: DeathRec[] = [];
+  /** Every calldown, in order. */
+  readonly strikes: StrikeRec[] = [];
+  /** Units and buildings completed, per side and kind. */
+  readonly built: Record<Faction, Record<string, number>> = perSide(() => ({}));
+  /** Game second each building kind was first completed. */
+  readonly firstBuilt: Record<Faction, Record<string, number>> = perSide(() => ({}));
+  /** Goliaths each side started with (Nomads: one each, never "built"). */
+  readonly startGoliaths: Record<Faction, number> = perSide(() => 0);
+  /** Factory samples: total, and idle while the side could afford a unit. */
+  readonly factories: Record<Faction, { total: number; idleRich: number }> = perSide(() => ({ total: 0, idleRich: 0 }));
+  readonly refs: MapRefs;
+  /** The sides playing (a four-player map's four, sim/sides.ts). */
+  readonly sides: readonly Faction[];
+  /** A free-for-all's knock-outs, in order: who, when (game seconds) and by whom. */
+  readonly out: { faction: Faction; t: number; by: Faction | null }[] = [];
+  /** Robot Love: when and where two enemy Goliaths fell in love and ended the match in a draw. */
+  love: { t: number; x: number; y: number } | null = null;
+  /** The best fallen unit per side (living units are checked at the end). */
+  private fallen: Record<Faction, HeroRec | null> = perSide(() => null);
+  private finished = false;
+  private credit: CalldownCredit;
+
+  constructor(private w: World) {
+    this.credit = new CalldownCredit(w);
+    this.sides = sidesOf(w);
+    const hq: MapRefs["hq"] = {};
+    for (const f of this.sides) {
+      const b = hqOf(w, f);
+      if (b) hq[f] = buildingCenter(b);
+    }
+    this.refs = { width: w.width, height: w.height, hq };
+    for (const u of w.units.values()) if (u.goliath) this.startGoliaths[u.faction]++;
+    this.sample();
+  }
+
+  private get t(): number {
+    return this.w.tick / TICK_RATE;
+  }
+
+  /** Call once per sim tick (after step). */
+  tick(): void {
+    if (this.finished) return;
+    if (this.w.tick % SAMPLE_TICKS === 0) this.sample();
+  }
+
+  onFx(ev: FxEvent): void {
+    if (this.finished) return;
+    const by = this.credit.see(ev);
+    if (ev.type === "calldown") {
+      // (what there was to dodge: every other side's units under it)
+      let exposed = 0;
+      for (const u of this.w.units.values())
+        if (u.faction !== ev.faction && Math.hypot(u.x - ev.x, u.y - ev.y) <= ev.radius) exposed++;
+      this.strikes.push({
+        id: ev.id, t: this.t, faction: ev.faction, power: ev.power, x: ev.x, y: ev.y, exposed, hits: 0, units: 0, buildings: 0, value: 0
+      });
+    } else if (ev.type === "calldownImpact") {
+      const st = this.strikes.find((s) => s.id === ev.id);
+      if (st) st.hits += ev.hits;
+    } else if (ev.type === "death") {
+      // (a knocked-out side's forces self-destructing are no one's kills: not the story)
+      if (this.out.some((o) => o.faction === ev.faction)) return;
+      this.deaths.push({
+        t: this.t, x: ev.x, y: ev.y, faction: ev.faction, unitKind: ev.unitKind, buildingKind: ev.buildingKind,
+        value: ev.value, killerKind: ev.killerKind, byBuilding: !by && ev.killerId !== null && ev.killerKind === null,
+        power: by?.power ?? null, strike: by?.calldownId ?? null,
+        by: isMulti(this.w) ? by?.faction ?? ev.by ?? null : other(ev.faction)
+      });
+      const st = by ? this.strikes.find((s) => s.id === by.calldownId) : undefined;
+      if (st) {
+        if (ev.buildingKind) st.buildings++;
+        else st.units++;
+        st.value += ev.value;
+      }
+      if (ev.unitKind && ev.kills > 0) {
+        const rec: HeroRec = {
+          id: ev.id, faction: ev.faction, kind: ev.unitKind, kills: ev.kills, rank: ev.rank, alive: false, diedAt: this.t
+        };
+        if (betterHero(rec, this.fallen[ev.faction])) this.fallen[ev.faction] = rec;
+      }
+    } else if (ev.type === "built") {
+      const kind = this.w.units.get(ev.id)?.kind ?? this.w.buildings.get(ev.id)?.kind;
+      if (!kind) return;
+      const b = this.built[ev.faction];
+      b[kind] = (b[kind] ?? 0) + 1;
+      const fb = this.firstBuilt[ev.faction];
+      if (fb[kind] === undefined) fb[kind] = this.t;
+    } else if (ev.type === "love") {
+      this.love = { t: this.t, x: ev.x, y: ev.y };
+    } else if (ev.type === "eliminated") {
+      this.out.push({ faction: ev.faction, t: this.t, by: ev.by });
+    }
+  }
+
+  sample(): void {
+    const w = this.w;
+    const army = perSide(() => 0);
+    const harvesters = perSide(() => 0);
+    for (const u of w.units.values()) {
+      if (u.kind === "harvester") harvesters[u.faction]++;
+      else army[u.faction] += (UNITS[u.kind].cost * Math.max(0, u.hp)) / UNITS[u.kind].hp;
+      // squads riding in a Condor still count toward the army
+      for (const p of u.passengers ?? []) army[p.faction] += (UNITS[p.kind].cost * Math.max(0, p.hp)) / UNITS[p.kind].hp;
+    }
+    for (const b of w.buildings.values()) {
+      // (no Gantry: it builds one Goliath at a time and idles between them by design)
+      if (b.kind !== "fab-plant" && b.kind !== "airpad" && b.kind !== "assembly-bay") continue;
+      const fc = this.factories[b.faction];
+      fc.total++;
+      if (b.queue.length === 0 && w.factions[b.faction].scrap >= 150) fc.idleRich++;
+    }
+    const s: Sample = {
+      t: this.t,
+      army,
+      bank: perSide((f) => Math.floor(w.factions[f].scrap)),
+      harvesters
+    };
+    const last = this.samples[this.samples.length - 1];
+    if (last && last.t === s.t) this.samples[this.samples.length - 1] = s;
+    else this.samples.push(s);
+  }
+
+  /** Close the record when the match ends (idempotent): a final sample. */
+  finish(): void {
+    if (this.finished) return;
+    this.sample();
+    this.finished = true;
+  }
+
+  /** The record so far (a copy), to put back with restore() when a replay rewinds the world to this tick. */
+  snapshot(): ChronicleSnapshot {
+    return structuredClone({
+      samples: this.samples, deaths: this.deaths, strikes: this.strikes, built: this.built, firstBuilt: this.firstBuilt,
+      factories: this.factories, out: this.out, love: this.love, fallen: this.fallen, finished: this.finished
+    });
+  }
+
+  /**
+   * Back to a snapshot, in place (the report and the scene hold this
+   * chronicle): a replay's seek put the world back to that tick, and what
+   * was recorded after it is played, and recorded, again.
+   */
+  restore(snap: ChronicleSnapshot): void {
+    const s = structuredClone(snap);
+    const refill = <T>(a: T[], from: T[]) => {
+      a.length = 0;
+      for (const x of from) a.push(x);
+    };
+    refill(this.samples, s.samples);
+    refill(this.deaths, s.deaths);
+    refill(this.strikes, s.strikes);
+    refill(this.out, s.out);
+    for (const f of FACTIONS) {
+      this.built[f] = s.built[f];
+      this.firstBuilt[f] = s.firstBuilt[f];
+      this.factories[f] = s.factories[f];
+    }
+    this.love = s.love;
+    this.fallen = s.fallen;
+    this.finished = s.finished;
+  }
+
+  /** The best unit per side by kills, fallen or alive. */
+  mvp(): Record<Faction, HeroRec | null> {
+    const best: Record<Faction, HeroRec | null> = { ...this.fallen };
+    // (squads riding in a Condor are off the field, but very much alive)
+    for (const u of this.w.units.values())
+      for (const x of u.passengers?.length ? [u, ...u.passengers] : [u]) {
+        if (x.kills <= 0) continue;
+        const rec: HeroRec = { id: x.id, faction: x.faction, kind: x.kind, kills: x.kills, rank: x.rank, alive: true, diedAt: null };
+        if (betterHero(rec, best[x.faction])) best[x.faction] = rec;
+      }
+    return best;
+  }
+}
+
+/** More kills wins; then higher rank; then the survivor. */
+export function betterHero(a: HeroRec, b: HeroRec | null): boolean {
+  if (!b) return true;
+  if (a.kills !== b.kills) return a.kills > b.kills;
+  if (a.rank !== b.rank) return a.rank > b.rank;
+  return a.alive && !b.alive;
+}
+
+const chronicles = new WeakMap<World, Chronicle>();
+
+/** The match's chronicle (created on first use, at match start). */
+export function chronicleOf(w: World): Chronicle {
+  let c = chronicles.get(w);
+  if (!c) chronicles.set(w, (c = new Chronicle(w)));
+  return c;
+}
+
+// ------------------------------------------------------------- analysis ---
+
+export const fmtTime = (s: number): string => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+/** "mid-map", "near your base", "in the north-east"… */
+export function placeName(refs: MapRefs, x: number, y: number, pov: Faction | null): string {
+  for (const f of Object.keys(refs.hq) as Faction[]) {
+    const h = refs.hq[f];
+    if (!h || Math.hypot(h.x - x, h.y - y) > 11) continue;
+    if (pov === null) return `at ${SIDE_NAME[f]}'s base`;
+    // (a free-for-all names whose base it was: "they" could be any of three)
+    return f === pov ? "at your base" : Object.keys(refs.hq).length > 2 ? `at ${SIDE_NAME[f]}'s base` : "at their base";
+  }
+  const dx = x - refs.width / 2;
+  const dy = y - refs.height / 2;
+  if (Math.hypot(dx, dy) < Math.min(refs.width, refs.height) * 0.14) return "mid-map";
+  const dirs = ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"];
+  const a = Math.atan2(dx, -dy); // 0 = north, clockwise
+  const i = Math.round(((a + Math.PI * 2) % (Math.PI * 2)) / (Math.PI / 4)) % 8;
+  return `in the ${dirs[i]}`;
+}
+
+export interface Battle {
+  t: number;
+  tEnd: number;
+  x: number;
+  y: number;
+  count: number;
+  /** Deaths per side that lost any (at least two sides). */
+  lost: PerSide<number>;
+  /** The calldown that did the most of it (≥ 2 deaths): whose losses, to what, how many. */
+  strike?: { victim: Faction; power: PowerKind; n: number } | null;
+}
+
+/**
+ * The biggest battle: the most deaths inside a `window`-second span within
+ * `radius` tiles of one spot (anchored on each death in turn). At least
+ * `min` deaths with losses on both sides, else null.
+ */
+export function biggestBattle(deaths: DeathRec[], window = 20, radius = 10, min = 4): Battle | null {
+  let best: Battle | null = null;
+  let bestScore = 0;
+  for (let i = 0; i < deaths.length; i++) {
+    const a = deaths[i]!;
+    const group = deaths.filter((d) => d.t >= a.t && d.t <= a.t + window && Math.hypot(d.x - a.x, d.y - a.y) <= radius);
+    if (group.length < min) continue;
+    const lost: Partial<Record<Faction, number>> = {};
+    for (const d of group) lost[d.faction] = (lost[d.faction] ?? 0) + 1;
+    if (Object.keys(lost).length < 2) continue; // a massacre, not a battle
+    // more deaths wins; value breaks ties (a mastodon brawl over a scout cull)
+    const score = group.length * 10000 + group.reduce((v, d) => v + d.value, 0);
+    if (score <= bestScore) continue;
+    bestScore = score;
+    best = {
+      t: group[0]!.t,
+      tEnd: group[group.length - 1]!.t,
+      x: group.reduce((s, d) => s + d.x, 0) / group.length,
+      y: group.reduce((s, d) => s + d.y, 0) / group.length,
+      count: group.length,
+      // (two sides at least lost some: in a duel, both)
+      lost: lost as PerSide<number>,
+      strike: topStrike(group)
+    };
+  }
+  return best;
+}
+
+/** The calldown power with the most kills among these deaths (at least 2), by victim side. */
+function topStrike(group: DeathRec[]): Battle["strike"] {
+  const n = new Map<string, { victim: Faction; power: PowerKind; n: number }>();
+  for (const d of group) {
+    if (!d.power) continue;
+    const k = `${d.faction}:${d.power}`;
+    const e = n.get(k) ?? { victim: d.faction, power: d.power, n: 0 };
+    e.n++;
+    n.set(k, e);
+  }
+  let best: Battle["strike"] = null;
+  for (const e of n.values()) if (e.n >= 2 && (!best || e.n > best.n)) best = e;
+  return best;
+}
+
+/**
+ * A calldown by `by` that killed at least 2 units (or 400 scrap) in the
+ * `window` seconds up to `t` (plus a few after): the strike that swung it.
+ */
+export function swingStrike(deaths: DeathRec[], by: Faction, t: number, window = 20): PowerKind | null {
+  const tally = new Map<number, { power: PowerKind; n: number; value: number }>();
+  for (const d of deaths) {
+    if (!d.power || d.strike == null || d.faction === by || d.t < t - window || d.t > t + 5) continue;
+    const e = tally.get(d.strike) ?? { power: d.power, n: 0, value: 0 };
+    e.n++;
+    e.value += d.value;
+    tally.set(d.strike, e);
+  }
+  let best: { power: PowerKind; n: number; value: number } | null = null;
+  for (const e of tally.values()) if ((e.n >= 2 || e.value >= 400) && (!best || e.value > best.value)) best = e;
+  return best?.power ?? null;
+}
+
+export interface Turn {
+  t: number;
+  /** The side that took the lead. */
+  leader: Faction;
+  /** Seconds the new lead held (to the end of the samples at most). */
+  held: number;
+  /** Did it hold to the end? */
+  toEnd: boolean;
+  army: PerSide<number>;
+}
+
+/** Who leads on army value at a sample: null when it's too close to call. */
+export function leaderAt(s: Sample): Faction | null {
+  const diff = s.army.blue - s.army.red;
+  const margin = Math.max(120, 0.12 * Math.max(s.army.blue, s.army.red));
+  return Math.abs(diff) < margin ? null : diff > 0 ? "blue" : "red";
+}
+
+/**
+ * Turning point: the last time the army-value lead passed to the other side
+ * and stayed there (never trailing again) for at least `hold` seconds. A
+ * brief swing that doesn't hold is noise, and the first established lead
+ * isn't a turn.
+ */
+export function turningPoint(samples: Sample[], hold = 30): Turn | null {
+  // runs of one side leading; too-close-to-call samples extend the run
+  const runs: { leader: Faction; i0: number; i1: number }[] = [];
+  samples.forEach((s, i) => {
+    const l = leaderAt(s);
+    const cur = runs[runs.length - 1];
+    if (cur && (l === null || l === cur.leader)) cur.i1 = i;
+    else if (l) runs.push({ leader: l, i0: i, i1: i });
+  });
+  let established: Faction | null = null;
+  let found: Turn | null = null;
+  runs.forEach((r, k) => {
+    // a run lasts until the other side's next lead (or the end)
+    const next = runs[k + 1];
+    const endT = next ? samples[next.i0]!.t : samples[samples.length - 1]!.t;
+    const held = endT - samples[r.i0]!.t;
+    if (held < hold) return;
+    if (established && established !== r.leader) {
+      const s = samples[r.i0]!;
+      found = { t: s.t, leader: r.leader, held, toEnd: !next, army: { ...s.army } };
+    }
+    established = r.leader;
+  });
+  return found;
+}
+
+/**
+ * When a side pulled decisively away (≥ 1.5× and ≥ 400 ahead) and stayed
+ * there to the end, for at least `hold` seconds — the story of a match whose
+ * lead never changed hands.
+ */
+export function pulledAway(samples: Sample[], hold = 30): { t: number; leader: Faction; army: PerSide<number> } | null {
+  if (samples.length < 2) return null;
+  const decisive = (s: Sample, l: Faction) => {
+    const a = s.army[l] ?? 0;
+    const b = s.army[other(l)] ?? 0;
+    return a >= 1.5 * b && a - b >= 400;
+  };
+  const last = samples[samples.length - 1]!;
+  const l: Faction = last.army.blue >= last.army.red ? "blue" : "red";
+  let i = samples.length;
+  while (i > 0 && decisive(samples[i - 1]!, l)) i--;
+  if (i >= samples.length || last.t - samples[i]!.t < hold) return null;
+  return { t: samples[i]!.t, leader: l, army: { ...samples[i]!.army } };
+}
+
+export const firstBlood = (deaths: DeathRec[]): DeathRec | null => deaths.find((d) => d.unitKind !== null) ?? null;
+
+const unitName = (k: UnitKind | null) => (k ? UNITS[k].name : "");
+const shortK = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n)));
+
+/** An HQ that fell this long before the end of the match was fought on without (sim seconds). */
+const FOUGHT_ON_S = 5;
+
+/** The first Goliath of the match (any side), from the first-built log. */
+function firstGoliath(firstBuilt: PerSide<Record<string, number>> | undefined): { faction: Faction; t: number } | null {
+  let best: { faction: Faction; t: number } | null = null;
+  for (const f of FACTIONS) {
+    const t = firstBuilt?.[f]?.["goliath"];
+    if (t !== undefined && (!best || t < best.t)) best = { faction: f, t };
+  }
+  return best;
+}
+
+/**
+ * The story beats, in time order, phrased for `pov` (null = spectator). With
+ * `firstBuilt` (the chronicle has it) the Goliath beats join in: the first
+ * one to walk off a Gantry, and an HQ that fell while its Goliath fought on.
+ * One Goliath beat (the match's first, not one per side) and at most one HQ
+ * beat per side, so the chart's numbered marks stay readable. With `love`, a
+ * Robot Love draw is the last beat.
+ */
+export function moments(
+  c: {
+    samples: Sample[];
+    deaths: DeathRec[];
+    refs: MapRefs;
+    firstBuilt?: PerSide<Record<string, number>>;
+    love?: { t: number; x: number; y: number } | null;
+    /** A free-for-all's sides and knock-outs (Chronicle.sides, .out): its own story (momentsMulti). */
+    sides?: readonly Faction[];
+    out?: readonly { faction: Faction; t: number; by: Faction | null }[];
+  },
+  pov: Faction | null
+): Moment[] {
+  if ((c.sides?.length ?? 2) > 2) return momentsMulti(c, pov);
+  const out: Moment[] = [];
+  const side = (f: Faction) => (pov === null ? SIDE_NAME[f] : f === pov ? "you" : "they");
+  const yours = (f: Faction) => (pov === null ? `${SIDE_NAME[f]}'s` : f === pov ? "your" : "their");
+  const Cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  const toneFor = (good: Faction | null): Moment["tone"] => (good === null || pov === null ? "neutral" : good === pov ? "good" : "bad");
+
+  const fb = firstBlood(c.deaths);
+  if (fb) {
+    const killer = other(fb.faction);
+    const by = fb.power
+      ? `${Cap(yours(killer))} ${powerName(fb.power)}`
+      : fb.killerKind
+        ? `${Cap(yours(killer))} ${unitName(fb.killerKind)}`
+        : fb.byBuilding
+          ? `${Cap(yours(killer))} defences`
+          : Cap(side(killer));
+    out.push({
+      kind: "first-blood", t: fb.t, title: "First blood",
+      text: `${by} took out ${yours(fb.faction)} ${unitName(fb.unitKind)}`,
+      tone: toneFor(killer)
+    });
+  }
+
+  const b = biggestBattle(c.deaths);
+  if (b) {
+    const where = placeName(c.refs, b.x, b.y, pov);
+    const p: Faction = pov ?? "blue";
+    const q: Faction = other(p);
+    const winner = b.lost.blue === b.lost.red ? null : (b.lost.blue ?? 0) < (b.lost.red ?? 0) ? "blue" : "red";
+    // "they lost 9 (4 to your Sky Hammer)"
+    const to = (f: Faction) =>
+      b.strike && b.strike.victim === f ? ` (${b.strike.n} to ${yours(other(f))} ${powerName(b.strike.power)})` : "";
+    out.push({
+      kind: "battle", t: b.t, title: "Biggest battle",
+      text: `${Cap(where)}: ${side(p)} lost ${b.lost[p] ?? 0}${to(p)}, ${side(q)} lost ${b.lost[q] ?? 0}${to(q)}`,
+      tone: toneFor(winner)
+    });
+  }
+
+  const turn = turningPoint(c.samples);
+  if (turn) {
+    const l = turn.leader;
+    const lead = `${shortK(turn.army[l] ?? 0)} vs ${shortK(turn.army[other(l)] ?? 0)}`;
+    // a strike by the new leader just before the turn is the story: "… after your Sky Hammer"
+    const swing = swingStrike(c.deaths, l, turn.t);
+    const after = swing ? ` after ${yours(l)} ${powerName(swing)}` : "";
+    const text =
+      pov === null
+        ? `${side(l)}'s army pulled ahead${after} (${lead})${turn.toEnd ? " and never looked back" : ""}`
+        : l === pov
+          ? `Your army overtook theirs${after} (${lead})${turn.toEnd ? " and never looked back" : ""}`
+          : `Their army overtook yours${after} (${lead})${turn.toEnd ? " and kept the lead" : ""}`;
+    out.push({ kind: "turn", t: turn.t, title: "Turning point", text, tone: toneFor(l) });
+  } else {
+    // the lead never changed hands: when did it become decisive?
+    const pa = pulledAway(c.samples);
+    if (pa) {
+      const l = pa.leader;
+      const lead = `${shortK(pa.army[l] ?? 0)} vs ${shortK(pa.army[other(l)] ?? 0)}`;
+      out.push({
+        kind: "lead", t: pa.t, title: "Pulled ahead",
+        text:
+          pov === null
+            ? `${side(l)}'s army pulled away (${lead}) and stayed ahead`
+            : l === pov
+              ? `Your army pulled away (${lead}) and stayed ahead`
+              : `Their army pulled away (${lead}); you never caught up`,
+        tone: toneFor(l)
+      });
+    }
+  }
+
+  // the first Goliath to walk off a Gantry (the match's first: one beat, not one per side; under
+  // Nomads the Goliaths a side starts with were never built, so "off the Gantry" still holds)
+  const fg = firstGoliath(c.firstBuilt);
+  if (fg) {
+    const f = fg.faction;
+    out.push({
+      kind: "goliath", t: fg.t, title: "Goliath",
+      text: `${Cap(yours(f))} first Goliath walked off ${pov !== null && f !== pov ? "their" : "the"} Gantry`,
+      tone: toneFor(f)
+    });
+  }
+
+  // an HQ that fell while the match went on: its Goliath fought on (a side that never fielded one isn't this story)
+  const end = c.samples.at(-1)?.t ?? 0;
+  for (const d of c.deaths) {
+    if (d.buildingKind !== "hq" || end - d.t < FOUGHT_ON_S) continue;
+    const had = c.firstBuilt?.[d.faction]?.["goliath"];
+    if (had === undefined || had > d.t) continue;
+    out.push({
+      kind: "hq", t: d.t, title: "HQ destroyed",
+      text: `${Cap(yours(d.faction))} HQ fell; ${yours(d.faction)} Goliath fought on for ${fmtTime(end - d.t)}`,
+      tone: toneFor(other(d.faction))
+    });
+  }
+
+  // Robot Love: the match ended with two Goliaths falling for each other (a draw, so nobody's beat)
+  if (c.love) {
+    const where = placeName(c.refs, c.love.x, c.love.y, pov);
+    out.push({
+      kind: "love", t: c.love.t, title: "Robot Love",
+      text: pov === null ? `Blue's and Red's Goliaths fell in love ${where}: a draw` : `Your Goliath and theirs fell in love ${where}: a draw`,
+      tone: "neutral"
+    });
+  }
+  return out.sort((a, b2) => a.t - b2.t);
+}
+
+/**
+ * A free-for-all's story beats (moments, four sides): first blood, the
+ * biggest brawl and who came off worst, each knock-out (and by whom), and
+ * the first Goliath. Who led on army value swings too often between four
+ * sides to make a "turning point", so there is none.
+ */
+function momentsMulti(
+  c: {
+    deaths: DeathRec[];
+    refs: MapRefs;
+    firstBuilt?: PerSide<Record<string, number>>;
+    out?: readonly { faction: Faction; t: number; by: Faction | null }[];
+  },
+  pov: Faction | null
+): Moment[] {
+  const out: Moment[] = [];
+  const name = (f: Faction) => (f === pov ? "you" : SIDE_NAME[f]);
+  const yours = (f: Faction) => (f === pov ? "your" : `${SIDE_NAME[f]}'s`);
+  const Cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  const toneFor = (good: Faction | null, bad: Faction | null = null): Moment["tone"] =>
+    pov === null ? "neutral" : good === pov ? "good" : bad === pov ? "bad" : "neutral";
+
+  const fb = firstBlood(c.deaths);
+  if (fb) {
+    const killer = fb.by ?? null;
+    const by = killer ? `${Cap(yours(killer))} ${fb.power ? powerName(fb.power) : fb.killerKind ? unitName(fb.killerKind) : fb.byBuilding ? "defences" : "forces"}` : "Someone";
+    out.push({ kind: "first-blood", t: fb.t, title: "First blood", text: `${by} took out ${yours(fb.faction)} ${unitName(fb.unitKind)}`, tone: toneFor(killer, fb.faction) });
+  }
+
+  const b = biggestBattle(c.deaths);
+  if (b) {
+    const where = placeName(c.refs, b.x, b.y, pov);
+    const lost = (f: Faction) => b.lost[f] ?? 0;
+    const losers = (Object.keys(b.lost) as Faction[]).filter((f) => lost(f) > 0).sort((x, y) => lost(y) - lost(x));
+    const text = losers.map((f) => `${name(f)} lost ${b.lost[f]}`).join(", ");
+    out.push({ kind: "battle", t: b.t, title: "Biggest battle", text: `${Cap(where)}: ${text}`, tone: toneFor(losers.at(-1) ?? null, losers[0] ?? null) });
+  }
+
+  for (const o of c.out ?? []) {
+    const by = o.by ? `${o.by === pov ? "by you" : `by ${SIDE_NAME[o.by]}`}` : "";
+    out.push({
+      kind: "hq", t: o.t, title: o.faction === pov ? "Knocked out" : `${SIDE_NAME[o.faction]} out`,
+      text: o.faction === pov ? `You were knocked out${by ? ` ${by}` : ""}` : `${SIDE_NAME[o.faction]} was knocked out${by ? ` ${by}` : ""}`,
+      tone: toneFor(o.by, o.faction)
+    });
+  }
+
+  const fg = firstGoliath(c.firstBuilt);
+  if (fg) out.push({ kind: "goliath", t: fg.t, title: "Goliath", text: `${Cap(yours(fg.faction))} first Goliath walked off the Gantry`, tone: toneFor(fg.faction) });
+  return out.sort((a, b2) => a.t - b2.t);
+}
+
+// ----------------------------------------------------------------- tips ---
+
+export interface TipInput {
+  pov: Faction;
+  won: boolean;
+  duration: number;
+  difficulty: string;
+  built: PerSide<Record<string, number>>;
+  firstBuilt: PerSide<Record<string, number>>;
+  deaths: DeathRec[];
+  samples: Sample[];
+  factories: PerSide<{ total: number; idleRich: number }>;
+  /** Goliaths each side started with (Nomads), on top of those built. */
+  startGoliaths?: PerSide<number>;
+  /** Everyone `pov` fought (a free-for-all's three; default the duel's one): "they" in the tips is all of them. */
+  rivals?: readonly Faction[];
+}
+
+/** One actionable tip, chosen by simple rules (the most pressing wins). */
+export function pickTip(i: TipInput): string {
+  const me = i.pov;
+  const rivals = i.rivals ?? [other(me)];
+  const them: Faction = rivals[0]!;
+  const one = (f: Faction, ...kinds: string[]) => kinds.reduce((s, k) => s + (i.built[f]?.[k] ?? 0), 0);
+  // ("they": the enemy's tally, or in a free-for-all every rival's together)
+  const n = (f: Faction, ...kinds: string[]) => (f === me ? one(me, ...kinds) : rivals.reduce((s, r) => s + one(r, ...kinds), 0));
+  const tips: { score: number; text: string }[] = [];
+
+  const enemyAir = n(them, "wasp", "raptor", "hornet");
+  const myAA = n(me, "flak-crawler", "raptor", "sam-site") + n(me, "lancer") * 0.5;
+  if (enemyAir >= 6 && myAA <= 1)
+    tips.push({
+      score: 90,
+      text: `The enemy fielded ${enemyAir} aircraft; you built ${myAA < 1 ? "almost no" : "barely any"} anti-air. Flak Crawlers, Raptors and SAM Sites shred them.`
+    });
+
+  // the Goliath's tuned answers (GOLIATH.md); its Menders keep it alive and its weapons coming back
+  const goliaths = n(them, "goliath") + rivals.reduce((s, r) => s + (i.startGoliaths?.[r] ?? 0), 0);
+  if (goliaths >= 1 && n(me, "rocket-squad", "wasp", "lancer", "hornet") <= 2)
+    tips.push({
+      score: 80,
+      text: `They fielded ${goliaths === 1 ? "a Goliath" : `${goliaths} Goliaths`}. Rocket Squads, Wasps, Lancers and Hornets bring one down; shoot its Menders first.`
+    });
+
+  const mastodons = n(them, "mastodon");
+  if (mastodons >= 4 && n(me, "lancer", "wasp", "hornet", "rocket-squad") <= 2)
+    tips.push({ score: 75, text: `They built ${mastodons} Mastodons. Rocket Squads, Lancers and Wasps burn through heavy armour.` });
+
+  // robot infantry: splash and Snipers are the answer (Mastodons only scratch them, unless they roll over them)
+  const squads = n(them, "trooper", "rocket-squad", "sniper");
+  if (squads >= 8 && n(me, "mortar", "hornet", "sniper", "turret") <= 1)
+    tips.push({ score: 72, text: `They fielded ${squads} infantry squads. Mortars, Hornets and Sniper Teams tear through robot infantry.` });
+
+  const harvLost = i.deaths.filter((d) => d.faction === me && d.unitKind === "harvester").length;
+  if (harvLost >= 5)
+    tips.push({ score: 70 + harvLost, text: `You lost ${harvLost} harvesters. A Turret by the mining line, or a couple of escorts, pays for itself.` });
+
+  const late = i.samples.filter((s) => s.t >= 90);
+  const avgHarv = late.length ? late.reduce((s, x) => s + (x.harvesters[me] ?? 0), 0) / late.length : 4;
+  if (i.duration > 240 && avgHarv < 2.5)
+    tips.push({ score: 65, text: `You ran about ${Math.max(1, Math.round(avgHarv))} harvester${Math.round(avgHarv) === 1 ? "" : "s"} most of the match. Income wins wars: aim for 4 or more early.` });
+
+  const fac = i.factories[me] ?? { total: 0, idleRich: 0 };
+  const idle = fac.total >= 10 ? fac.idleRich / fac.total : 0;
+  if (idle > 0.3)
+    tips.push({ score: 60, text: `Your factories sat idle with scrap in the bank ${Math.round(idle * 100)}% of the time. Keep a unit queued.` });
+
+  const banked = i.samples.filter((s) => s.t >= 120);
+  const avgBank = banked.length ? banked.reduce((s, x) => s + (x.bank[me] ?? 0), 0) / banked.length : 0;
+  if (avgBank > 800)
+    tips.push({ score: 55, text: `You sat on ${Math.round(avgBank / 100) * 100} scrap on average. Spend it: add a second Fab Plant or Airpad.` });
+
+  const artillery = i.deaths.filter(
+    (d) => d.faction === me && d.buildingKind && (d.killerKind === "mortar" || d.killerKind === "hornet")
+  ).length;
+  if (artillery >= 3)
+    tips.push({ score: 50, text: `Mortars and Hornets wrecked ${artillery} of your buildings. Wasps catch Mortars; Flak, Raptors and SAMs stop Hornets.` });
+
+  // (a Drop Pod's thump barely counts: Barrages and Sky Hammers are the ones to dodge)
+  const struck = i.deaths.filter((d) => d.faction === me && d.unitKind && d.power && d.power !== "droppod").length;
+  if (struck >= 6)
+    tips.push({
+      score: 48,
+      text: `Enemy calldowns destroyed ${struck} of your units. When a red circle appears, select what's inside and move it out: a Barrage takes 2.5 s to land.`
+    });
+
+  const byTowers = i.deaths.filter((d) => d.faction === me && d.unitKind && d.byBuilding).length;
+  if (byTowers >= 8)
+    tips.push({ score: 45, text: `Defences killed ${byTowers} of your units. Crack turrets with Mortars or Hornets before you push.` });
+
+  const tech = i.firstBuilt[me]?.["tech-lab"];
+  if (i.duration > 420 && (tech === undefined || tech > 360))
+    tips.push({ score: 40, text: "No Tech Lab by 6:00. It unlocks Mastodons, Lancers, Mortars, Hornets and Sniper Teams." });
+
+  if (i.won)
+    tips.push({
+      score: 10,
+      text: i.difficulty === "hard" ? `Won on Hard in ${fmtTime(i.duration)}. Can you do it faster?` : "A clean win. Ready to try a harder AI?"
+    });
+  tips.push({ score: 5, text: "Scout early and build counters: long-press any build button to see what beats what." });
+  // (a free-for-all's "they" is every rival together)
+  if (rivals.length > 1)
+    for (const t of tips) t.text = t.text.replace(/^The enemy fielded/, "Your rivals fielded").replace(/^They (fielded|built)/, "Your rivals $1");
+  // after a win, only a serious problem outranks the congratulations
+  const pool = i.won ? tips.filter((t) => t.score >= 50 || t.score === 10) : tips;
+  pool.sort((a, b) => b.score - a.score);
+  return pool[0]!.text;
+}
+
+/** Spectator: one line per commander. */
+export function commanderStory(c: Chronicle, w: World, f: Faction, label: string): string {
+  const st = w.factions[f].stats;
+  const kinds = Object.entries(c.built[f]).filter(([k]) => k in UNITS && k !== "harvester");
+  kinds.sort((a, b) => b[1] - a[1]);
+  const top = kinds[0];
+  let peak = 0;
+  let peakT = 0;
+  for (const s of c.samples)
+    if ((s.army[f] ?? 0) > peak) {
+      peak = s.army[f] ?? 0;
+      peakT = s.t;
+    }
+  const parts = [`${label}`];
+  if (top) parts.push(`mostly ${UNITS[top[0] as UnitKind].name}s (${top[1]})`);
+  if (peak > 0) parts.push(`peak army ${shortK(peak)} at ${fmtTime(peakT)}`);
+  parts.push(`${st.buildingsLost} building${st.buildingsLost === 1 ? "" : "s"} lost`);
+  return parts.join(" · ");
+}
+
+/** Peak army value and when (for the stats table). */
+export function peakArmy(samples: Sample[], f: Faction): number {
+  return samples.reduce((m, s) => Math.max(m, s.army[f] ?? 0), 0);
+}

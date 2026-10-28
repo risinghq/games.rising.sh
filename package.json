@@ -1,0 +1,14 @@
+{
+  "name": "games.rising.sh",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "workspaces": ["games/*", "packages/*"],
+  "scripts": {
+    "check": "bun run --filter './games/*' check",
+    "build": "bun run --filter './games/*' build && bun scripts/assemble.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.153.0"
+  }
+}
