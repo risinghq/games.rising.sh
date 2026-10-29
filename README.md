@@ -10,6 +10,9 @@ commit, recorded in [NOTICE](NOTICE).
 The second is [Tug](games/tug/), a tiny two-sided rope game that proves the
 shared [sim-kit](packages/sim-kit/) with a different rule set.
 
+The third is [Reef](games/reef/), a sealed-bid pearl-diving game. Its
+[rules](games/reef/RULES.md) fit one page.
+
 ## Run a game
 
 Install [mise](https://mise.jdx.dev), then:
