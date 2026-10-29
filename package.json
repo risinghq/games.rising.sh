@@ -13,7 +13,7 @@
   "scripts": {
     "lint": "oxfmt --check .",
     "fix": "oxfmt .",
-    "check": "bun run lint && bun run --cwd games/battledrones check"
+    "check": "bun run lint && bun run --cwd packages/sim-kit check && bun run --cwd games/tug check && bun run --cwd games/battledrones check"
   },
   "devDependencies": {
     "oxfmt": "^0.75.0",

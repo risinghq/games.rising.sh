@@ -1,0 +1,12 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "games-tug",
+  "compatibility_date": "2026-10-01",
+  // `bun run stage` copies dist/ to .deploy/tug/, so the asset paths carry the
+  // /tug/ prefix the route serves them under.
+  "assets": { "directory": "./.deploy" },
+  "routes": [
+    { "pattern": "games.rising.sh/tug", "zone_name": "rising.sh" },
+    { "pattern": "games.rising.sh/tug/*", "zone_name": "rising.sh" },
+  ],
+}

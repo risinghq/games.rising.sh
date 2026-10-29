@@ -31,6 +31,9 @@ import { describe, expect, it } from "vitest";
 /** Every module under src/, as text, keyed "../src/…". */
 const sources = import.meta.glob("../src/**/*.ts", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
 
+/** The workspace package of seeded randomness, hashing and deterministic maths (packages/sim-kit). */
+const SIM_KIT = "@rising/sim-kit";
+
 /** One import of a module: what it names, how, and whether it is erased (types only). */
 interface Ref {
   spec: string;
@@ -168,6 +171,7 @@ function valueGraph(entry: string): { files: Set<string>; problems: string[] } {
     files.add(file);
     for (const r of refsOf(file)) {
       if (r.typeOnly) continue;
+      if (r.spec.startsWith(SIM_KIT)) continue; // pure shared code: no DOM, no timers
       if (r.kind === "dynamic") problems.push(`${where(file, r)}: a dynamic import`);
       else if (!r.path || !(r.path in sources)) problems.push(`${where(file, r)}: not a source file`);
       else todo.push(r.path);

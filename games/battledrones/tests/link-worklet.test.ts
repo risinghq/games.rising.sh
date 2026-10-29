@@ -1078,6 +1078,7 @@ describe("the worklet's import graph", () => {
       graph.add(file);
       for (const [, type, spec] of src!.matchAll(imports)) {
         if (type) continue;
+        if (spec!.startsWith("@rising/sim-kit")) continue; // pure shared code: no DOM, no timers
         expect(spec!.startsWith("."), `${file} imports the package ${spec}`).toBe(true);
         todo.push(resolve(file, spec!));
       }
