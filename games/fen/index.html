@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fen</title>
+    <style>
+      :root {
+        --blue: #1d4ed8;
+        --red: #b91c1c;
+        --mud: #ecefe6;
+        --reed: #bfd8a8;
+        --ink: #0f172a;
+      }
+      body {
+        font:
+          16px/1.4 system-ui,
+          sans-serif;
+        color: var(--ink);
+        max-width: 36rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      h1 {
+        margin-bottom: 0.25rem;
+      }
+      .blue {
+        color: var(--blue);
+      }
+      .red {
+        color: var(--red);
+      }
+      #board {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        gap: 0.25rem;
+        margin: 1rem 0;
+      }
+      #board button {
+        position: relative;
+        min-height: 5rem;
+        padding: 0.25rem;
+        border: 2px solid transparent;
+        border-radius: 0.5rem;
+        background: var(--mud);
+        color: inherit;
+        font: inherit;
+        font-size: 0.8rem;
+        cursor: pointer;
+      }
+      #board button.reeds {
+        background: var(--reed);
+      }
+      #board button:disabled {
+        opacity: 0.65;
+        cursor: default;
+      }
+      #board button[aria-pressed="true"] {
+        border-color: var(--ink);
+      }
+      #board small {
+        display: block;
+        opacity: 0.7;
+      }
+      #board strong {
+        display: block;
+        font-size: 1.4rem;
+      }
+      table {
+        border-collapse: collapse;
+        margin: 1rem 0;
+      }
+      th,
+      td {
+        padding: 0.25rem 1rem 0.25rem 0;
+        text-align: left;
+      }
+      fieldset {
+        border: 0;
+        padding: 0;
+        margin: 0 0 1rem;
+      }
+      label,
+      button {
+        font: inherit;
+        margin-right: 0.75rem;
+      }
+      #log {
+        min-height: 3rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Fen</h1>
+    <p>
+      Two hunters in a marsh. Each turn you both move and fire at once, so aim
+      where the other will stand. You are <strong class="blue">blue</strong>.
+    </p>
+    <div id="board" role="group" aria-label="The marsh"></div>
+    <table>
+      <thead>
+        <tr>
+          <th scope="col"></th>
+          <th scope="col">Hp</th>
+          <th scope="col">Rounds</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row" class="blue">You</th>
+          <td id="hp-blue"></td>
+          <td id="ammo-blue"></td>
+        </tr>
+        <tr>
+          <th scope="row" class="red">Red</th>
+          <td id="hp-red"></td>
+          <td id="ammo-red"></td>
+        </tr>
+      </tbody>
+    </table>
+    <p id="hint"></p>
+    <form id="turn">
+      <fieldset>
+        <legend>Move</legend>
+        <label><input type="radio" name="move" value="-1" /> Left</label>
+        <label><input type="radio" name="move" value="0" checked /> Stay</label>
+        <label><input type="radio" name="move" value="1" /> Right</label>
+      </fieldset>
+      <p>
+        <button id="go" type="submit">Go</button>
+        <button id="hold" type="button">Hold fire</button>
+      </p>
+    </form>
+    <p id="log" aria-live="polite"></p>
+    <p>
+      <label
+        >Opponent
+        <select id="foe"></select
+      ></label>
+      <button id="again" type="button">New game</button>
+    </p>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
