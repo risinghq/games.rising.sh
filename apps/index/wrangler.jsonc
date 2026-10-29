@@ -1,0 +1,9 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "games-index",
+  "compatibility_date": "2026-10-01",
+  // `bun run stage` copies dist/ to .deploy/, so index.html sits at the root of
+  // the assets. The route matches `/` only, so the game Workers keep their paths.
+  "assets": { "directory": "./.deploy" },
+  "routes": [{ "pattern": "games.rising.sh/", "zone_name": "rising.sh" }],
+}

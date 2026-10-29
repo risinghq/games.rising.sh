@@ -1,0 +1,137 @@
+:root {
+  color-scheme: light dark;
+
+  --hue: 250;
+  --neutral-1: oklch(0.99 0.004 var(--hue));
+  --neutral-2: oklch(0.96 0.008 var(--hue));
+  --neutral-11: oklch(0.45 0.02 var(--hue));
+  --neutral-12: oklch(0.23 0.02 var(--hue));
+  --accent-11: oklch(0.42 0.17 var(--hue));
+
+  --surface: var(--neutral-1);
+  --surface-hover: var(--neutral-2);
+  --text: var(--neutral-12);
+  --text-muted: var(--neutral-11);
+  --accent: var(--accent-11);
+
+  --font-sans: system-ui, sans-serif;
+  --text-base: 1rem;
+  --text-lg: 1.25rem;
+  --text-title: 2rem;
+  --weight-regular: 400;
+  --weight-strong: 600;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-4: 1rem;
+  --space-8: 2rem;
+  --space-12: 3rem;
+  --radius: 0.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --neutral-1: oklch(0.19 0.012 var(--hue));
+    --neutral-2: oklch(0.24 0.016 var(--hue));
+    --neutral-11: oklch(0.76 0.02 var(--hue));
+    --neutral-12: oklch(0.95 0.01 var(--hue));
+    --accent-11: oklch(0.8 0.12 var(--hue));
+  }
+}
+
+@media (min-width: 40rem) {
+  :root {
+    --text-title: 2.5rem;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--text);
+  font: var(--weight-regular) var(--text-base) / 1.5 var(--font-sans);
+}
+
+main {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-4) var(--space-12);
+}
+
+h1 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-title);
+  font-weight: var(--weight-strong);
+  line-height: 1.2;
+  text-wrap: balance;
+}
+
+h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-strong);
+  line-height: 1.25;
+}
+
+p {
+  margin: 0;
+  max-width: 65ch;
+  text-wrap: pretty;
+}
+
+.intro {
+  color: var(--text-muted);
+}
+
+ul {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-8) calc(var(--space-4) * -1) 0;
+  padding: 0;
+  list-style: none;
+}
+
+li {
+  position: relative;
+  padding: var(--space-4);
+  border-radius: var(--radius);
+}
+
+li:hover {
+  background: var(--surface-hover);
+}
+
+li p {
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+}
+
+/* The link covers its whole row, so the row is the touch target. */
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius);
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+a:focus-visible {
+  outline: none;
+}
+
+a:focus-visible::after {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
