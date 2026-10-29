@@ -4,31 +4,9 @@
  * drifting apart (SOUND-DUEL.md). Never change what worldHash covers: saved
  * records pin its values.
  */
+import { Fnv } from "@rising/sim-kit";
 import type { World } from "./types";
 import { sidesOf } from "./sides";
-
-const buf = new DataView(new ArrayBuffer(8));
-
-/** FNV-1a over the bytes of numbers. */
-class Fnv {
-  h = 0x811c9dc5;
-  num(n: number): void {
-    buf.setFloat64(0, n);
-    for (let i = 0; i < 8; i++) {
-      this.h ^= buf.getUint8(i);
-      this.h = Math.imul(this.h, 0x01000193);
-    }
-  }
-  str(s: string): void {
-    for (let i = 0; i < s.length; i++) {
-      this.h ^= s.charCodeAt(i) & 0xff;
-      this.h = Math.imul(this.h, 0x01000193);
-    }
-  }
-  hex(): string {
-    return (this.h >>> 0).toString(16).padStart(8, "0");
-  }
-}
 
 /** A hash of everything that matters in the world: any drift shows up within 100 ticks. */
 export function worldHash(w: World): string {

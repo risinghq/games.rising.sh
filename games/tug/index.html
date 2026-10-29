@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tug</title>
+    <style>
+      body {
+        font:
+          16px system-ui,
+          sans-serif;
+        max-width: 28rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      #rope {
+        position: relative;
+        height: 2rem;
+        background: #ddd;
+        border-radius: 1rem;
+      }
+      #knot {
+        position: absolute;
+        top: 0;
+        width: 2rem;
+        height: 2rem;
+        margin-left: -1rem;
+        border-radius: 50%;
+        background: #333;
+      }
+      button {
+        font: inherit;
+        padding: 0.5rem 1rem;
+        margin-right: 0.5rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Tug</h1>
+    <p>
+      Pull the rope to your end. A harder pull costs stamina; an exhausted pull
+      does nothing.
+    </p>
+    <div id="rope"><div id="knot"></div></div>
+    <p id="status"></p>
+    <p id="buttons"></p>
+    <p><button id="again">New game</button></p>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

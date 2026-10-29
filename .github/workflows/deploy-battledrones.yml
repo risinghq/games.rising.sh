@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - games/battledrones/**
+      - packages/sim-kit/**
       - package.json
       - bun.lock
       - mise.toml

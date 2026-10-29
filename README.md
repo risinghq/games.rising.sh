@@ -7,6 +7,9 @@ strategy game by [Simon Willison](https://github.com/simonw). It is imported
 from [simonw/battledrones](https://github.com/simonw/battledrones) at a pinned
 commit, recorded in [NOTICE](NOTICE).
 
+The second is [Tug](games/tug/), a tiny two-sided rope game that proves the
+shared [sim-kit](packages/sim-kit/) with a different rule set.
+
 ## Run a game
 
 Install [mise](https://mise.jdx.dev), then:
@@ -30,7 +33,15 @@ Playwright smoke scripts.
 ## Layout
 
 - `games/<name>/` holds one game, as a bun workspace package.
-- `packages/` is for code shared by games.
+- `packages/` is for code shared by games. `packages/sim-kit` holds the seeded
+  random numbers, the engine-independent maths, the state hash and the batch
+  playtest helpers. A game never calls `Math.random`.
+
+Play a batch of seeded Tug matches and print win shares and draws:
+
+```sh
+bun run --cwd games/tug batch --seeds 200
+```
 
 [docs/deploy.md](docs/deploy.md) explains how a game reaches Cloudflare.
 

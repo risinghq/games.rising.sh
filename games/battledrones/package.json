@@ -24,6 +24,7 @@
     "art:textures": "python3 art/textures.py"
   },
   "dependencies": {
+    "@rising/sim-kit": "workspace:*",
     "qrcode-generator": "^2.0.4",
     "three": "^0.185.1"
   },

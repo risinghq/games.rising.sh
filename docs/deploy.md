@@ -1,7 +1,7 @@
 # Deploy
 
 Each game is a static Cloudflare Worker with its own route on `games.rising.sh`.
-Battle Drones is served at `/battledrones/`.
+Battle Drones is served at `/battledrones/` and Tug at `/tug/`.
 
 The workflow
 [deploy-battledrones.yml](../.github/workflows/deploy-battledrones.yml) runs on
