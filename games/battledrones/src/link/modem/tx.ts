@@ -105,6 +105,9 @@ export class Transmitter {
   // outputs for ModemCore
   txPackets = 0;
   clips = 0;
+  /** Work done so far, counted rather than timed: tone-samples synthesized, and symbols started. */
+  toneSamples = 0;
+  symbolsStarted = 0;
   /** Packet starts since the last read: frame, running packet number, and the key of the payload it carries (NaN: none). */
   readonly slotFrames = new Float64Array(64);
   readonly slotIndex = new Float64Array(64);
@@ -221,6 +224,7 @@ export class Transmitter {
   }
 
   private boundary(f: number): void {
+    this.symbolsStarted++;
     // the symbol on air fades out over the next TW samples
     const sw = this.prev;
     this.prev = this.cur;
@@ -376,6 +380,7 @@ export class Transmitter {
   private run(bank: Bank, acc: Float64Array, m: number): void {
     const tb = bank.tb!;
     const n = tb.band.k.length;
+    this.toneSamples += n * m;
     const c2 = tb.c2;
     const Y1 = bank.y1;
     const Y0 = bank.y0;

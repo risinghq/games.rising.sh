@@ -159,6 +159,8 @@ export class Decoder {
   /** Packets decoded in all (garbage included), and those the gate stopped. */
   runs = 0;
   gated = 0;
+  /** Trellis steps the Viterbi decoder has run, over all packets. */
+  steps = 0;
 
   /**
    * Viterbi, the gate, then the CRC: the session key first (when there is
@@ -168,6 +170,7 @@ export class Decoder {
   run(job: DecodeJob, sessionKey: number | null): void {
     const sh = job.tb!.shape[job.mode];
     this.runs++;
+    this.steps += sh.steps;
     job.ok = false;
     job.session = false;
     const d = this.decoded;

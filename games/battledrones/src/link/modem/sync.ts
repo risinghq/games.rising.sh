@@ -291,6 +291,14 @@ export interface Recorr {
 
 export class SyncSearch {
   readonly corr = new Map<string, CorrBand>();
+  /** Correlation values compared by recorrelate() and findIn() so far (counted rather than timed). */
+  lookups = 0;
+  /** Values the job loops (block packing, spectra, kernel products, outputs, detector) visited so far. */
+  jobValues = 0;
+  /** FFT bit-reversal slots and butterflies the jobs ran so far. */
+  get fftOps(): number {
+    return this.half.ops + this.small.ops;
+  }
   readonly M: number;
   readonly Md: number;
   /** Input samples (a multiple of DECIM) and decimated outputs per block. */
@@ -489,6 +497,7 @@ export class SyncSearch {
     const zi = this.zIm;
     const s = this.inBuf;
     ring.copy(b, b + M, s, 0);
+    this.jobValues += M + M / 2;
     for (let m = 0; m < M / 2; m++) {
       zr[m] = s[2 * m]!;
       zi[m] = s[2 * m + 1]!;
@@ -508,6 +517,7 @@ export class SyncSearch {
     const H = this.M / 2;
     const zr = this.zRe;
     const zi = this.zIm;
+    this.jobValues += this.Md;
     for (let i = 0; i < this.Md; i++) {
       const k = c.kLo + i;
       const a = k % H;
@@ -536,6 +546,7 @@ export class SyncSearch {
     const xi = this.xwIm;
     const pw = this.binPower;
     const n = c.inHi - c.inLo;
+    this.jobValues += n + this.Md;
     for (let i = 0; i < n; i++) {
       const a = xr[c.inLo + i]!;
       const b = xi[c.inLo + i]!;
@@ -582,6 +593,7 @@ export class SyncSearch {
   private times(kr: Float64Array, ki: Float64Array): void {
     const yr = this.yRe;
     const yi = this.yIm;
+    this.jobValues += this.Md;
     for (let i = 0; i < this.Md; i++) {
       const xr = this.xwRe[i]!;
       const xi = this.xwIm[i]!;
@@ -596,6 +608,7 @@ export class SyncSearch {
     const yi = this.yIm;
     const nD = this.nD;
     let e = 0;
+    this.jobValues += nD + this.hopD;
     for (let i = 0; i < nD; i++) e += yr[i]! * yr[i]! + yi[i]! * yi[i]!;
     const en = this.energy;
     for (let n = 0; n < this.hopD; n++) {
@@ -611,6 +624,7 @@ export class SyncSearch {
     const yr = this.yRe;
     const yi = this.yIm;
     const mag = this.magA;
+    this.jobValues += this.hopD;
     for (let n = 0; n < this.hopD; n++) mag[n] = Math.sqrt(yr[n]! * yr[n]! + yi[n]! * yi[n]!);
   }
 
@@ -622,6 +636,7 @@ export class SyncSearch {
     const n0 = this.n0;
     const en = this.energy;
     const ma = this.magA;
+    this.jobValues += this.hopD;
     for (let n = 0; n < this.hopD; n++) {
       const norm = Math.sqrt((DECIM / 2) * en[n]!) * c.tNorm;
       const mb = Math.sqrt(yr[n]! * yr[n]! + yi[n]! * yi[n]!);
@@ -636,6 +651,7 @@ export class SyncSearch {
   private finishBand(c: CorrBand, silent: boolean): void {
     const n0 = this.n0;
     const n1 = n0 + this.hopD;
+    this.jobValues += this.hopD;
     if (silent) {
       for (let n = n0; n < n1; n++) {
         c.rhoA[n & RHO_MASK] = 0;
@@ -656,6 +672,7 @@ export class SyncSearch {
   recorrelate(c: CorrBand, e: number, out: Recorr): boolean {
     const mid = Math.round(e / DECIM);
     if (c.done <= mid + this.R) return false;
+    this.lookups += 2 * this.R + 1;
     let best = mid - this.R;
     let rb = -1;
     for (let n = mid - this.R; n <= mid + this.R; n++) {
@@ -683,6 +700,7 @@ export class SyncSearch {
     const n0 = Math.ceil(from / DECIM);
     const n1 = Math.floor(to / DECIM);
     if (c.done < n1) return false;
+    this.lookups += Math.max(0, n1 - n0);
     let best = n0;
     let rb = -1;
     for (let n = n0; n < n1; n++) {

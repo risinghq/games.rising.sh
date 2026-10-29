@@ -165,6 +165,18 @@ export class Receiver {
   heardBefore = -Infinity;
   private readonly maxShift: number;
   private readonly near: number;
+  /** Work done so far, counted rather than timed: tone-samples of DFT the trackers accumulated, and symbols they finalized. */
+  toneSamples = 0;
+  symbolsDone = 0;
+  /** Sync candidates taken off the search's queue. */
+  candidatesDone = 0;
+  /** Packets the Viterbi decoder ran on (garbage included), and the trellis steps it took. */
+  get decodes(): number {
+    return this.decoder.runs;
+  }
+  get viterbiSteps(): number {
+    return this.decoder.steps;
+  }
   // stats
   rxOk = 0;
   rxBad = 0;
@@ -230,7 +242,10 @@ export class Receiver {
 
   /** The light work of one process() call: candidates, trackers (within `budget` tone-samples), sync checks. */
   step(budget: number): void {
-    for (let c = this.search.candidates.shift(); c; c = this.search.candidates.shift()) this.candidate(c);
+    for (let c = this.search.candidates.shift(); c; c = this.search.candidates.shift()) {
+      this.candidatesDone++;
+      this.candidate(c);
+    }
     let used = 0;
     const main = this.main;
     if (main) {
@@ -238,6 +253,7 @@ export class Receiver {
       for (;;) {
         used += main.work(this.ring, budget - used);
         if (!main.finalized) break;
+        this.symbolsDone++;
         this.symbol(main);
         if (this.main !== main) break;
         if (main.sfPending) this.resolveSync(main);
@@ -250,8 +266,10 @@ export class Receiver {
     for (let tr = this.trial; tr && tr === this.trial && tu < trialBudget; ) {
       tu += tr.work(this.ring, trialBudget - tu);
       if (!tr.finalized) break;
+      this.symbolsDone++;
       this.symbol(tr);
     }
+    this.toneSamples += used + tu;
   }
 
   private candidate(c: Candidate): void {

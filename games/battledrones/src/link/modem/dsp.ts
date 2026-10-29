@@ -11,6 +11,8 @@ export class FFT {
   private readonly cos: Float64Array;
   private readonly sin: Float64Array;
   private readonly rev: Uint32Array;
+  /** Bit-reversal slots and butterflies run so far (counted rather than timed). */
+  ops = 0;
 
   constructor(size: number) {
     if (size < 2 || (size & (size - 1)) !== 0) throw new RangeError(`FFT size ${size} is not a power of two`);
@@ -48,6 +50,7 @@ export class FFT {
   runPasses(re: Float64Array, im: Float64Array, inverse: boolean, first: number, last: number): void {
     const n = this.size;
     if (first === 0) {
+      this.ops += n;
       const rev = this.rev;
       for (let i = 0; i < n; i++) {
         const j = rev[i]!;
@@ -67,6 +70,7 @@ export class FFT {
     for (let len = 1 << Math.max(1, first), end = 1 << (last - 1); len <= end; len <<= 1) {
       const half = len >> 1;
       const step = n / len;
+      this.ops += n >> 1;
       for (let i = 0; i < n; i += len) {
         for (let k = 0, t = 0; k < half; k++, t += step) {
           const wr = ct[t]!;

@@ -42,6 +42,8 @@ export class SelfMonitor {
   /** Speaker-to-microphone delay (samples), once heard. */
   loop: number | null = null;
   ownSnrDb: number | null = null;
+  /** Tone-samples of DFT the pilots' tracker has accumulated so far (counted rather than timed). */
+  toneSamples = 0;
   /** Syncs sent that still await their search: when each went out, its pattern, and the window it is looked for in. */
   private readonly pendE = new Float64Array(8);
   private readonly pendMode: ModemMode[] = ["robust", "robust", "robust", "robust", "robust", "robust", "robust", "robust"];
@@ -143,7 +145,9 @@ export class SelfMonitor {
     const tr = this.tracker;
     let used = 0;
     while (tr.active && used < budget) {
-      used += tr.work(ring, budget - used);
+      const u = tr.work(ring, budget - used);
+      used += u;
+      this.toneSamples += u;
       if (!tr.finalized) break;
       const j = tr.lastJ;
       if (j === 0 || tr.erased[j]) continue;

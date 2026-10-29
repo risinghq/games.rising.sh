@@ -127,6 +127,39 @@ export interface RxPacket {
   session: boolean;
 }
 
+/**
+ * Cumulative work of process(), one unit per kind of loop in it: nothing it
+ * does that grows with the signal goes uncounted.
+ */
+export interface ModemWork {
+  /** Input frames scanned for silence, peak and non-finite samples. */
+  frames: number;
+  /** Samples the input ring wrote or zero-filled (a gap's, a jump's, a reset's). */
+  ringSamples: number;
+  /** Tone-samples the transmitter synthesized (tones × samples, the crossfade's second bank included). */
+  txToneSamples: number;
+  /** Symbols the transmitter started (modulation, latching, the new symbol's oscillator states). */
+  txSymbols: number;
+  /** Tone-samples of DFT the receiver's and the self-monitor's trackers accumulated. */
+  toneSamples: number;
+  /** Symbols the receiver's trackers finalized. */
+  symbols: number;
+  /** Correlation values the sync re-correlations and the monitor's searches compared. */
+  lookups: number;
+  /** Packets the Viterbi decoder ran on (at most one heavy job a block). */
+  decodes: number;
+  /** Trellis steps those decodes took. */
+  viterbiSteps: number;
+  /** Sync-search jobs run, an FFT or a piece of one (at most one heavy job a block). */
+  ffts: number;
+  /** FFT bit-reversal slots and butterflies those jobs ran. */
+  fftOps: number;
+  /** Values the jobs' other loops visited (block packing, spectra, kernel products, outputs, detector). */
+  jobValues: number;
+  /** Sync candidates the receiver took off the search's queue. */
+  candidates: number;
+}
+
 export interface ModemStats {
   sample: number;
   locked: boolean;
@@ -173,8 +206,8 @@ export interface GapEvent {
  * in, and with blocks of 512 or more the lock fell behind by 5% of the time
  * elapsed until its windows fell off the ring and it heard nothing.
  */
-const BUDGET = 375;
-const MONITOR_BUDGET = 62.5;
+export const BUDGET = 375;
+export const MONITOR_BUDGET = 62.5;
 /** A lock won on a friend not heard for longer than this (s), whose stream started over, restarts this phone's superframe (see above)... */
 const REACQUIRE_S = 1;
 /** ...unless it restarted for that less than this long ago (s), or restarted at all since it last heard the friend. */
@@ -205,6 +238,8 @@ export class ModemCore {
   private gapStart = 0;
   private gapLen = 0;
   private peak = 0;
+  private frames = 0;
+  private ffts = 0;
   /** Frame of this phone's newest superframe restart (a jump, the counter going back, or a re-acquisition), of its newest for a re-acquisition, and the frames that must pass before the next of those. */
   private lastRestart = -Infinity;
   private lastReacquire = -Infinity;
@@ -311,6 +346,7 @@ export class ModemCore {
       if (a > peak && a < Infinity) peak = a;
     }
     this.peak = peak;
+    this.frames += n;
     if (silent || !finite) {
       if (!this.inGap) {
         this.inGap = true;
@@ -328,7 +364,7 @@ export class ModemCore {
     this.rx.step(BUDGET * n);
     this.mon.step(this.tx, this.search, this.ring, MONITOR_BUDGET * n);
     // one deferred heavy job: a waiting decode first, else the sync search's next FFT
-    if (!this.rx.runDecode()) this.search.runJob(this.ring);
+    if (!this.rx.runDecode() && this.search.runJob(this.ring)) this.ffts++;
     if (this.rx.detected) this.planFound(this.rx.detected);
     if (this.rx.reacquired) {
       // a friend heard again after a long silence, whose stream started over, lost this phone too: a sync for it now,
@@ -458,6 +494,32 @@ export class ModemCore {
     for (let i = 0; i < this.gapCount; i++) out.push({ sample: this.gapSample[i]!, frames: this.gapFrames[i]! });
     this.gapCount = 0;
     return out;
+  }
+
+  /**
+   * What process() has computed since construction, counted rather than
+   * timed: a cost that does not depend on the machine it runs on. The units
+   * are a tripwire for cost growth in the paths they cover (the input scan,
+   * the ring, synthesis, the trackers, the sync search's jobs and candidate
+   * queue, the decoder), not a profile of process(): a loop with no unit
+   * here can still grow unseen.
+   */
+  work(): ModemWork {
+    return {
+      frames: this.frames,
+      ringSamples: this.ring.touched,
+      txToneSamples: this.tx.toneSamples,
+      txSymbols: this.tx.symbolsStarted,
+      toneSamples: this.rx.toneSamples + this.mon.toneSamples,
+      symbols: this.rx.symbolsDone,
+      lookups: this.search.lookups,
+      decodes: this.rx.decodes,
+      viterbiSteps: this.rx.viterbiSteps,
+      ffts: this.ffts,
+      fftOps: this.search.fftOps,
+      jobValues: this.search.jobValues,
+      candidates: this.rx.candidatesDone
+    };
   }
 
   stats(): ModemStats {

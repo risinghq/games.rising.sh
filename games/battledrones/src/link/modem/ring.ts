@@ -22,6 +22,8 @@ export class InputRing {
   private readonly gapFrom = new Float64Array(GAPS);
   private readonly gapTo = new Float64Array(GAPS);
   private gapHead = 0;
+  /** Samples written or zero-filled so far (a reset's whole ring included): the ring's work, counted rather than timed. */
+  touched = 0;
 
   constructor() {
     this.gapFrom.fill(-1);
@@ -37,12 +39,14 @@ export class InputRing {
   reset(at: number): void {
     this.start = this.end = at;
     this.buf.fill(0);
+    this.touched += RING_SIZE;
     this.gapFrom.fill(-1);
     this.gapTo.fill(-1);
   }
 
   /** Append samples at `end`. */
   write(x: Float32Array, from: number, to: number): void {
+    this.touched += to - from;
     let p = this.end % RING_SIZE;
     for (let i = from; i < to; i++) {
       this.buf[p] = x[i]!;
@@ -59,7 +63,8 @@ export class InputRing {
   skip(n: number): void {
     const from = this.end;
     const fill = Math.min(n, RING_SIZE);
-    const p = (this.end + n - fill) % RING_SIZE;
+    this.touched += fill;
+    const p =(this.end + n - fill) % RING_SIZE;
     const q = Math.min(p + fill, RING_SIZE);
     this.buf.fill(0, p, q);
     this.buf.fill(0, 0, fill - (q - p));
