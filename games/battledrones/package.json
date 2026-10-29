@@ -18,6 +18,7 @@
     "mapgen": "vite-node tools/mapgen-preview.ts",
     "balance": "vite-node tools/balance.ts",
     "arena": "vite-node tools/arena.ts",
+    "gate": "vite-node tools/gate.ts",
     "art:generate": "python3 art/generate.py",
     "art:process": "python3 art/process.py",
     "art:terrain": "python3 art/terrain.py",
