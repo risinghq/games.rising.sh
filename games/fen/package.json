@@ -1,0 +1,25 @@
+{
+  "name": "fen",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "stage": "rm -rf .deploy && mkdir .deploy && cp -r dist .deploy/fen",
+    "deploy": "bun run build && bun run stage && wrangler deploy",
+    "check": "tsc --noEmit && vitest run",
+    "batch": "vite-node tools/batch.ts",
+    "gate": "vite-node tools/gate.ts"
+  },
+  "dependencies": {
+    "@rising/sim-kit": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0",
+    "vite-node": "^2.1.9",
+    "vitest": "^2.1.0"
+  }
+}
