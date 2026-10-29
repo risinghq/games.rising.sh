@@ -1,0 +1,4 @@
+import{U as a,D as n}from"./advisor-DdC--AQ6.js";import{G as i,c as d}from"./unit-info-BQWsqyBS.js";document.getElementById("nav").innerHTML=i.flatMap(t=>t.kinds).map(t=>`<a href="#${t}"><img src="./assets/icons/${t}.webp" alt="" />${a[t].name}</a>`).join("");document.getElementById("units").innerHTML=i.map(t=>`<h2 class="group">${t.title}</h2><div class="grid">${t.kinds.map(e=>d(e)).join("")}</div>`).join("");const m={light:"Light",medium:"Medium",heavy:"Heavy",structure:"Buildings",infantry:"Infantry"},s=Object.keys(m),o=t=>Object.keys(a).filter(e=>a[e].dmgType===t).map(e=>a[e].name).join(", "),r=t=>`<td class="${t>=1.2?"hi":t<=.7?"lo":""}">×${t}</td>`;document.getElementById("damage").innerHTML=`<table class="dmg">
+  <thead><tr><th>Damage</th>${s.map(t=>`<th>${m[t]}</th>`).join("")}</tr></thead>
+  <tbody>${Object.keys(n).map(t=>`<tr><th>${t}<small>${o(t)}</small></th>${s.map(e=>r(n[t][e])).join("")}</tr>`).join("")}</tbody>
+</table>`;
