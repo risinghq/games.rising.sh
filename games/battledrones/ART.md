@@ -19,8 +19,8 @@ its in-game 3D model (end of section 1, and ICONS.md).
 > 512², seamless) that texture the outcrops' cliff walls and crags, so they
 > are the same stone as the painted tops. The generated **unit and building art** no longer
 > appears in the game: the HUD portraits (`public/assets/icons/`) are shots of the 3D models
-> too (end of section 1). The key art and icons are unchanged. The sprite atlas (`public/assets/sprites/`) is still produced
-> by `process.py` but is no longer loaded by the game.
+> too (end of section 1). The key art and icons are unchanged. `process.py` can still build the sprite atlas, but the game loads
+> none of it, so the atlas and its preview are not kept in the repository.
 
 The pipeline lives in `art/` (Python 3.10+, Pillow ≥ 10.1, numpy, scipy,
 and the `openai` package for generation):
@@ -134,16 +134,18 @@ Deterministic (same raws → byte-identical output). It:
    padding, zeroes RGB under transparent pixels, and writes a Phaser
    multiatlas.
 
-Outputs and the contract the engine relies on:
+Outputs. The engine loads the key art and the PWA icons. It loads none of the
+atlas files, so they are not committed; `public/assets/sprites/` and
+`art/previews/atlas-preview.png` appear only when you run the script.
 
 | File | Contents |
 |---|---|
-| `public/assets/sprites/game.json` + `game-0.webp` | 2048² multiatlas (~1.3 MB WebP) |
-| `public/assets/sprites/meta.json` | `pxPerTile` (128), per-frame `origin` pivots, turret/head `mounts` (tiles, hull facing north), unit `sizes` |
+| `public/assets/sprites/game.json` + `game-0.webp` | 2048² multiatlas (~1.3 MB WebP), not committed |
+| `public/assets/sprites/meta.json` | `pxPerTile` (128), per-frame `origin` pivots, turret/head `mounts` (tiles, hull facing north), unit `sizes`; not committed |
 | `public/assets/ui/keyart-{portrait,landscape}.webp` | Menu backgrounds |
 | `public/icons/icon-{192,512}.png` | PWA icons |
 | `public/icons/apple-touch-icon.png` | 180 px iOS Home Screen icon (opaque, square corners) |
-| `art/previews/atlas-preview.png` | QA contact sheet |
+| `art/previews/atlas-preview.png` | QA contact sheet, not committed |
 
 Frame names: `u/<faction>/<unit>` (hull or body), `u/<faction>/<unit>-turret`,
 `u/<faction>/harvester-full`, `b/<faction>/<building>`,
