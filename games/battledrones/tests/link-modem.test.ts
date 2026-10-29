@@ -11,9 +11,10 @@
 // loud noise, a bad gain, blocks longer than the worklet's.
 import { describe, expect, it } from "vitest";
 import html from "../radio-probe.html?raw";
-import { ModemCore, type ModemConfig, type RxPacket } from "../src/link/modem/core";
+import { BUDGET, MONITOR_BUDGET, ModemCore, type ModemConfig, type ModemWork, type RxPacket } from "../src/link/modem/core";
 import { FFT, selectInPlace } from "../src/link/modem/dsp";
 import { ToneWeights } from "../src/link/modem/outlier";
+import { RING_SIZE } from "../src/link/modem/ring";
 import { CLIP, PACKET_SYMBOLS, SUPERFRAME_SYMBOLS, TS, timing, toneAmplitude } from "../src/link/modem/params";
 import { RoomLink } from "../src/link/room-transport";
 import { Room, type RoomEndpoint, type RoomOptions } from "../src/link/sim/room";
@@ -25,6 +26,26 @@ const code = /<script id="probe-core">([\s\S]*?)<\/script>/.exec(html)![1]!;
 const Probe: any = new Function("window", `${code}\nreturn ProbeCore;`)({});
 
 const SUPERFRAME_S = SUPERFRAME_SYMBOLS * TS;
+
+/** Symbols the receiver finalizes in one block of a live duel at most: a block is a fraction of a symbol. */
+const MAX_SYMBOLS_PER_BLOCK = 4;
+/** What modem A computes in 60 s of the seed-101 duel (see "counts a tripwire for cost growth"). */
+const DUEL_60S_WORK = {
+  blocks: 22481,
+  frames: 2877568,
+  ringSamples: 3008640,
+  txToneSamples: 353933760,
+  txSymbols: 1199,
+  toneSamples: 320101965,
+  symbols: 1201,
+  lookups: 37441,
+  decodes: 612,
+  viterbiSteps: 128520,
+  ffts: 5995,
+  fftOps: 47054848,
+  jobValues: 20747354,
+  candidates: 30
+};
 
 /** A lobby-type frame (10…) carrying a packet counter, then filler that depends on it, `nbits` long. */
 function frameOf(k: number, side: number, nbits = 188): Uint8Array {
@@ -151,25 +172,32 @@ function withTone(m: ModemCore, sr: number, hz: number, amp: number): RoomEndpoi
   };
 }
 
+/** What a stretch of process() calls computed: the counters of `to` minus those of `from`. */
+function workSince(from: ModemWork, to: ModemWork): ModemWork {
+  const d = { ...to };
+  for (const k of Object.keys(d) as (keyof ModemWork)[]) d[k] -= from[k];
+  return d;
+}
+
 /**
  * One modem hearing itself through a plain 75 ms loopback (self-test), block
  * by block (128 frames, or `block`): `frame` may be moved between calls, and
- * `onBlock` sees each output (`frame` still the block's first, `ms` what its
- * process() call took).
+ * `onBlock` sees each output (`frame` still the block's first, `cost` the work
+ * its process() call did).
  */
 function selfLoop(self: ModemCore, sr: number, block = 128) {
   const out = new Float32Array(block);
   const inp = new Float32Array(block);
   const delay = new Float32Array(1 << 16);
   const lag = Math.round(0.075 * sr);
-  const st = { frame: 0, ms: 0, onBlock: null as ((out: Float32Array) => void) | null };
+  const st = { frame: 0, cost: workSince(self.work(), self.work()), onBlock: null as ((out: Float32Array) => void) | null };
   const run = (seconds: number) => {
     for (const end = st.frame + seconds * sr; st.frame < end; st.frame += block) {
       const f = st.frame;
       for (let i = 0; i < block; i++) inp[i] = 0.3 * delay[(f + i) & 0xffff]! + 1e-4 * Math.sin(f + i);
-      const t0 = performance.now();
+      const w0 = self.work();
       self.process(inp, out, f);
-      st.ms = performance.now() - t0;
+      st.cost = workSince(w0, self.work());
       for (let i = 0; i < block; i++) delay[(f + i + lag) & 0xffff] = out[i]!;
       st.onBlock?.(out);
     }
@@ -880,12 +908,13 @@ describe("what the audio thread and the phone throw at it", () => {
   );
 
   it(
-    "a frame counter that jumps ten minutes or an hour ahead (a phone suspended that long): the block carrying the jump takes a millisecond or so, not time in proportion to the jump, and decoding resumes",
+    "a frame counter that jumps ten minutes or an hour ahead (a phone suspended that long): the block carrying the jump finalizes the symbols of the ring's history, not of the jump, and decoding resumes",
     () => {
       // The skip after a long suspension is a gap as long as the suspension. The lock passes over the symbols it missed
       // in one step; it used to finalize each, erased, in the one process() call: 20 ms of the audio thread for ten
-      // minutes and 110–230 ms for an hour, against a 2.67 ms quantum. (Under a millisecond now, the ring's 2.7 s of
-      // zeros included; the bound leaves room for a loaded machine.)
+      // minutes and 110–230 ms for an hour, against a 2.67 ms quantum. Now only the ring's 2.7 s of zeros are finalized
+      // erased, one by one. Erased symbols cost no tone-samples, so the work is read in symbols finalized in the block.
+      const ringSymbols = Math.ceil(RING_SIZE / (48000 * TS)) + 2;
       const sr = 48000;
       for (const minutes of [10, 60]) {
         const self = new ModemCore({ sampleRate: sr, plan: "high", tx: "host", rx: "host" });
@@ -895,12 +924,17 @@ describe("what the audio thread and the phone throw at it", () => {
         const before = self.stats().rxOk;
         expect(before).toBeGreaterThan(10);
         loop.st.frame += minutes * 60 * sr;
-        let jumpMs = -1;
+        // the most symbols finalized in one block from the jump on (the jump's block is the first of them)
+        let most = 0;
+        let ring = 0;
         loop.st.onBlock = () => {
-          if (jumpMs < 0) jumpMs = loop.st.ms;
+          most = Math.max(most, loop.st.cost.symbols);
+          ring = Math.max(ring, loop.st.cost.ringSamples);
         };
         loop.run(6);
-        expect(jumpMs, `${minutes} min`).toBeLessThan(5);
+        expect(most, `${minutes} min`).toBeLessThanOrEqual(ringSymbols);
+        // the zeros written for the jump are the ring's size at most, however long the jump
+        expect(ring, `${minutes} min`).toBeLessThanOrEqual(RING_SIZE + 128);
         expect(self.stats().rxOk, `${minutes} min`).toBeGreaterThan(before + 20);
       }
     },
@@ -1361,30 +1395,48 @@ describe("the modem's CPU and globals", () => {
   });
 
   it(
-    "runs 60 s of a duel with 128-frame blocks under 0.7 ms at p99 (and the room with two modems over 5× real time)",
+    "counts a tripwire for cost growth over 60 s of a duel in 128-frame blocks: bounded counted units in every block and exact totals for the seed",
     () => {
+      // The cost is counted, not timed: the same run counts the same on any machine at any load. The ModemWork units
+      // are a tripwire for cost growth in the paths they cover (the input scan and ring, synthesis, the trackers, the
+      // sync search's jobs and candidate queue, the decoder), not a profile of process(). A change that makes a block
+      // do more, or a packet cost more to receive, in those paths moves a number below; if the change is meant, take
+      // the new totals from the failure.
       const d = new Duplex({ seed: 101, distanceCm: 30, a: { ownDb: 40, jammerDb: -30 }, b: { ownDb: 40, jammerDb: -30, sampleRate: 44100, ppm: -250 } }, "fast");
-      // time ModemCore A's process() alone
       const a = d.m[0];
-      const times: number[] = [];
-      const timed: RoomEndpoint = {
-        process(i, o, f) {
-          const t0 = performance.now();
-          a.process(i, o, f);
-          times.push(performance.now() - t0);
-        }
+      const hook = d.room.onBlock!;
+      let last = a.work();
+      const worst = { frames: 0, ringSamples: 0, txSymbols: 0, toneSamples: 0, symbols: 0, heavy: 0 };
+      let blocks = 0;
+      d.room.onBlock = (side, f) => {
+        hook(side, f);
+        if (side !== 0) return;
+        const now = a.work();
+        const w = workSince(last, now);
+        last = now;
+        blocks++;
+        worst.frames = Math.max(worst.frames, w.frames);
+        worst.ringSamples = Math.max(worst.ringSamples, w.ringSamples);
+        worst.txSymbols = Math.max(worst.txSymbols, w.txSymbols);
+        worst.toneSamples = Math.max(worst.toneSamples, w.toneSamples);
+        worst.symbols = Math.max(worst.symbols, w.symbols);
+        worst.heavy = Math.max(worst.heavy, w.decodes + w.ffts);
       };
-      d.room.setEndpoint(0, timed);
-      d.room.run(2); // warm the JIT
-      times.length = 0;
-      const t0 = performance.now();
+      const start = a.work();
       d.room.run(60);
-      const wall = (performance.now() - t0) / 1000;
-      times.sort((x, y) => x - y);
-      const p99 = times[Math.floor(times.length * 0.99)]!;
-      expect(times.length).toBeGreaterThan(22000);
-      expect(p99).toBeLessThan(0.7);
-      expect(60 / wall).toBeGreaterThan(5);
+      const total = workSince(start, a.work());
+      expect(blocks).toBeGreaterThan(22000);
+      // per block: each frame is scanned and written once, a block starts at most one symbol, the budgets bound the
+      // tone-samples (the lock gets BUDGET a frame, a trial a third more at most, the pilots MONITOR_BUDGET), and one
+      // heavy job runs
+      expect(worst.frames).toBe(128);
+      // (the first block also clears the ring)
+      expect(worst.ringSamples).toBe(RING_SIZE + 128);
+      expect(worst.txSymbols).toBeLessThanOrEqual(1);
+      expect(worst.toneSamples).toBeLessThanOrEqual(Math.ceil(((BUDGET * 4) / 3 + MONITOR_BUDGET) * 128));
+      expect(worst.symbols).toBeLessThanOrEqual(MAX_SYMBOLS_PER_BLOCK);
+      expect(worst.heavy).toBeLessThanOrEqual(1);
+      expect({ blocks, ...total }).toEqual(DUEL_60S_WORK);
       // the duel kept going meanwhile
       expect(d.delivery(1, 3, 61).frac).toBeGreaterThan(0.95);
     },
