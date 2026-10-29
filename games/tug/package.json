@@ -9,7 +9,8 @@
     "stage": "rm -rf .deploy && mkdir .deploy && cp -r dist .deploy/tug",
     "deploy": "bun run build && bun run stage && wrangler deploy",
     "check": "tsc --noEmit && vitest run",
-    "batch": "vite-node tools/batch.ts"
+    "batch": "vite-node tools/batch.ts",
+    "gate": "vite-node tools/gate.ts"
   },
   "dependencies": {
     "@rising/sim-kit": "workspace:*"
