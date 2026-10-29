@@ -33,9 +33,21 @@ bun run --cwd games/battledrones build   # writes games/battledrones/dist
 The game's own README lists its other tools, such as the AI pacing panel and the
 Playwright smoke scripts.
 
+## Front page
+
+[apps/index](apps/index/) builds the front page, a static HTML page that lists
+every game and links to it. Each game has a `games/<name>/game.json` with its
+`name` (the folder), `title` and one-line `blurb`. To add a game to the page,
+add its `game.json`. The tests fail when a folder under `games/` has none.
+
+```sh
+bun run --cwd apps/index build   # writes apps/index/dist/index.html
+```
+
 ## Layout
 
 - `games/<name>/` holds one game, as a bun workspace package.
+- `apps/index/` holds the front page.
 - `packages/` is for code shared by games. `packages/sim-kit` holds the seeded
   random numbers, the engine-independent maths, the state hash and the batch
   playtest helpers. A game never calls `Math.random`.

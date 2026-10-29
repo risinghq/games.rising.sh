@@ -21,6 +21,16 @@ The script builds the game, copies `dist/` to `.deploy/<game>/` and runs
 `wrangler deploy`. The game's `wrangler.jsonc` serves `.deploy/` as static
 assets on the routes `games.rising.sh/<game>` and `games.rising.sh/<game>/*`.
 
+## Front page
+
+The front page is its own Worker, [apps/index](../apps/index/). Its route is
+`games.rising.sh/`, which matches `/` only, so each game keeps its own paths.
+Wrangler warns that the route serves assets on a path. It is expected: `/`
+serves `index.html`. A request with a query string, such as `/?x=1`, does not
+match the route. [deploy-index.yml](../.github/workflows/deploy-index.yml) also
+runs when a `games/*/game.json` changes, because the page is built from those
+files. Deploy it like a game: `bun run --cwd apps/index deploy`.
+
 ## One-time setup
 
 1. DNS. In the Cloudflare dashboard, open the `rising.sh` zone, then DNS, then
@@ -48,7 +58,8 @@ assets on the routes `games.rising.sh/<game>` and `games.rising.sh/<game>/*`.
    | `CLOUDFLARE_ACCOUNT_ID` | the account id, step 3 |
 
 6. First deploy. Open Actions, choose `deploy <game>`, and press Run workflow.
-   Then open `https://games.rising.sh/<game>/`. Repeat for each game.
+   Then open `https://games.rising.sh/<game>/`. Repeat for each game. Run
+   `deploy index` last and open `https://games.rising.sh/`.
 
 ## Deploy from your machine
 
@@ -74,4 +85,5 @@ cd games/<game> && bunx wrangler deploy --dry-run
 Give the game its own `wrangler.jsonc` with a unique `name` and its own route
 `games.rising.sh/<game>/*`, its own `stage` and `deploy` scripts, and its own
 workflow whose `paths` list the game's folder and each `packages/` folder it
-imports. The secrets and the DNS record are shared.
+imports. Add a `game.json` so the front page lists it. The secrets and the DNS
+record are shared.
