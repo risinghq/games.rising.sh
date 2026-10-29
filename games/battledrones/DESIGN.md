@@ -1783,6 +1783,31 @@ Known gaps (re-checked after the review fixes):
   vehicle's centre pushes it all the way to the squad's goal, as one
   vehicle does another; the slightest offset slides past instead.
 
+### The pacing gate
+
+`npm run gate` (`tools/gate.ts`) is the PR check on pacing. It plays a fixed
+roster with the pacing panel's sim (`tools/pacing-match.ts`: Normal, openers,
+Uplinks and drops on, 25-minute cap) and exits 1 when `THRESHOLDS` breaks.
+
+The roster is 56 matches. Each map plays 4 of the 15 personality pairs, in both
+colours (a rotating window, so every pair plays and every map is covered).
+Playing both colours cancels a personality's strength out of the side skew.
+Seeds come from `jobSeed(7000, job)`, so a run is the same on every machine and
+for any number of processes. The gate splits the roster across one process per
+core with `planBatch`; on 4 CPUs it takes about 100 s.
+
+| Limit        | Value          | Why                                                                                                                                                                                                        |
+| ------------ | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Matches      | 56             | The whole roster. A smaller batch means the roster was cut.                                                                                                                                                |
+| Draw rate    | 15%            | The full roster (630 matches, 3 seeds) measures 4.6%, the gate's roster 2%. Archipelago alone draws 19%, so a rate of 15% over every map means ties have become common.                                    |
+| Blue's share | 50% ± 20 points | The full roster measures 53%, the gate's roster 60%. A roster of 56 has a sampling error of 6.5 points, so 20 points passes a fair game 99 times in 100. Giving blue 4,000 starting scrap lifts it to 80%. |
+
+A change that moves the numbers a few points passes; the gate catches a side
+broken outright, not a subtle edge. Any change to the sim reshuffles every
+match, so a failure on a fair game is possible at about 1 in 100: rerun, and if
+it fails again, run the full panel (`tools/pacing.ts`) before changing the
+limits.
+
 ### Match flow
 
 1. Menu: pick a mode (Skirmish | Last Stand | Ops), a map, a difficulty and

@@ -260,6 +260,7 @@ npm run dev            # Vite dev server
 npx vite --config tools/vite-https.config.ts   # the same over HTTPS, for a sound duel on phones (SOUND-DUEL.md)
 npm test               # Vitest suite for the simulation layer
 npm run build          # typecheck + production build into dist/
+npm run gate           # pacing gate: 56 seeded AI-vs-AI matches, exits 1 on a draw-rate or side-skew breach (DESIGN.md "The pacing gate")
 npm run smoke          # headless Playwright test of the real touch flow (against dist/)
 npm run smoke -- --side=red   # the same flow playing red against a blue AI (SOUND-DUEL.md)
 npm run build:pages    # build current game + all version tags into _site/
