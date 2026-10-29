@@ -1,0 +1,12 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "games-fen",
+  "compatibility_date": "2026-10-01",
+  // `bun run stage` copies dist/ to .deploy/fen/, so the asset paths carry the
+  // /fen/ prefix the route serves them under.
+  "assets": { "directory": "./.deploy" },
+  "routes": [
+    { "pattern": "games.rising.sh/fen", "zone_name": "rising.sh" },
+    { "pattern": "games.rising.sh/fen/*", "zone_name": "rising.sh" },
+  ],
+}
