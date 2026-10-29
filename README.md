@@ -13,6 +13,9 @@ shared [sim-kit](packages/sim-kit/) with a different rule set.
 The third is [Reef](games/reef/), a sealed-bid pearl-diving game. Its
 [rules](games/reef/RULES.md) fit one page.
 
+The fourth is [Fen](games/fen/), a marsh hunt where both hunters move and fire
+at once. Its [rules](games/fen/RULES.md) fit one page.
+
 ## Run a game
 
 Install [mise](https://mise.jdx.dev), then:
