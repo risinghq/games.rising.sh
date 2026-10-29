@@ -52,5 +52,6 @@ bun run --cwd games/tug batch --seeds 200
 
 Apache 2.0, see [LICENSE](LICENSE). Battle Drones is by Simon Willison, also
 under Apache 2.0, see [games/battledrones/LICENSE](games/battledrones/LICENSE).
-Its sprites and textures were generated with an image model, as
+Its images were generated with an image model, except the HUD portraits, which
+are renders of its 3D models, as
 [games/battledrones/ART.md](games/battledrones/ART.md) describes.

@@ -1,15 +1,23 @@
 games.rising.sh
-Copyright 2026 David Duran
+Copyright 2026 David (totallynotdavid)
 
 This repository includes Battle Drones, a browser strategy game.
 
   Name:    Battle Drones
-  Author:  Simon Willison
+  Authors: Simon Willison, Eli Albert, and commits authored by Claude
+           (Anthropic), per the upstream git history
   Source:  https://github.com/simonw/battledrones
   Commit:  ca4f13b36013e1980289046e731a295d2bf02a3e
   License: Apache License 2.0
   Path:    games/battledrones/
 
-The game's own license is kept at games/battledrones/LICENSE. The sprites and
-textures it ships were generated with an image model (see
+Upstream carries no copyright line of its own and no NOTICE file. The game's
+license is kept unchanged at games/battledrones/LICENSE.
+
+Changes to the upstream tree: progress-shots/, research_notes/ and
+package-lock.json are removed, and package.json gains the check, stage and
+deploy scripts. Later changes are in this repository's git history.
+
+The images the game ships were generated with an image model, except the HUD
+portraits, which are renders of the game's 3D models (see
 games/battledrones/ART.md).
