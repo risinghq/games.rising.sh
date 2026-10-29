@@ -19,3 +19,5 @@ jobs:
       - run: bun run --cwd games/battledrones build
       - run: bun run --cwd games/tug build
       - run: bun run --cwd games/tug gate
+      - run: bun run --cwd games/reef build
+      - run: bun run --cwd games/reef gate

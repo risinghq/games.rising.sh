@@ -1,23 +1,25 @@
 # Deploy
 
 Each game is a static Cloudflare Worker with its own route on `games.rising.sh`.
-Battle Drones is served at `/battledrones/` and Tug at `/tug/`.
 
-The workflow
-[deploy-battledrones.yml](../.github/workflows/deploy-battledrones.yml) runs on
-a push to `main` that changes `games/battledrones/`, the lockfile, the tool
-versions or the workflow itself. It also runs by hand from the Actions tab. It
-installs with `bun install --frozen-lockfile` and runs the game's `deploy`
-script:
+| Game          | Workflow                                                                | Route                           |
+| ------------- | ----------------------------------------------------------------------- | ------------------------------- |
+| Battle Drones | [deploy-battledrones.yml](../.github/workflows/deploy-battledrones.yml) | `games.rising.sh/battledrones/` |
+| Tug           | [deploy-tug.yml](../.github/workflows/deploy-tug.yml)                   | `games.rising.sh/tug/`          |
+| Reef          | [deploy-reef.yml](../.github/workflows/deploy-reef.yml)                 | `games.rising.sh/reef/`         |
+
+A workflow runs on a push to `main` that changes the game's folder, a
+`packages/` folder it imports, the lockfile, the tool versions or the workflow
+itself. It also runs by hand from the Actions tab. It installs with
+`bun install --frozen-lockfile` and runs the game's `deploy` script:
 
 ```sh
-bun run --cwd games/battledrones deploy
+bun run --cwd games/<game> deploy
 ```
 
-The script builds the game, copies `dist/` to `.deploy/battledrones/` and runs
-`wrangler deploy`. [wrangler.jsonc](../games/battledrones/wrangler.jsonc) serves
-`.deploy/` as static assets on the routes `games.rising.sh/battledrones` and
-`games.rising.sh/battledrones/*`.
+The script builds the game, copies `dist/` to `.deploy/<game>/` and runs
+`wrangler deploy`. The game's `wrangler.jsonc` serves `.deploy/` as static
+assets on the routes `games.rising.sh/<game>` and `games.rising.sh/<game>/*`.
 
 ## One-time setup
 
@@ -45,8 +47,8 @@ The script builds the game, copies `dist/` to `.deploy/battledrones/` and runs
    | `CLOUDFLARE_API_TOKEN`  | the token from step 2  |
    | `CLOUDFLARE_ACCOUNT_ID` | the account id, step 3 |
 
-6. First deploy. Open Actions, choose `deploy battledrones`, and press Run
-   workflow. Then open `https://games.rising.sh/battledrones/`.
+6. First deploy. Open Actions, choose `deploy <game>`, and press Run workflow.
+   Then open `https://games.rising.sh/<game>/`. Repeat for each game.
 
 ## Deploy from your machine
 
@@ -56,15 +58,15 @@ Build and deploy without the workflow:
 export CLOUDFLARE_API_TOKEN=<token>
 export CLOUDFLARE_ACCOUNT_ID=<account id>
 bun install
-bun run --cwd games/battledrones deploy
+bun run --cwd games/<game> deploy
 ```
 
 To check the configuration without uploading anything:
 
 ```sh
-bun run --cwd games/battledrones build
-bun run --cwd games/battledrones stage
-cd games/battledrones && bunx wrangler deploy --dry-run
+bun run --cwd games/<game> build
+bun run --cwd games/<game> stage
+cd games/<game> && bunx wrangler deploy --dry-run
 ```
 
 ## Add a game

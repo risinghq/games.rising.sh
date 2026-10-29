@@ -1,0 +1,35 @@
+name: deploy reef
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - games/reef/**
+      - packages/sim-kit/**
+      - package.json
+      - bun.lock
+      - mise.toml
+      - .github/workflows/deploy-reef.yml
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-reef
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd games/reef deploy
