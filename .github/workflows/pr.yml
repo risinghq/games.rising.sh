@@ -26,3 +26,5 @@ jobs:
       - run: bun run --cwd games/fen gate
       - run: bun run --cwd games/ford build
       - run: bun run --cwd games/ford gate
+      - run: bun run --cwd games/border build
+      - run: bun run --cwd games/border gate
