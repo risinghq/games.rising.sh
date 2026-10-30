@@ -16,6 +16,9 @@ The third is [Reef](games/reef/), a sealed-bid pearl-diving game. Its
 The fourth is [Fen](games/fen/), a marsh hunt where both hunters move and fire
 at once. Its [rules](games/fen/RULES.md) fit one page.
 
+The fifth is [Ford](games/ford/), where both armies split their troops across
+three river fords at once. Its [rules](games/ford/RULES.md) fit one page.
+
 ## Run a game
 
 Install [mise](https://mise.jdx.dev), then:

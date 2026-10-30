@@ -8,6 +8,7 @@ Each game is a static Cloudflare Worker with its own route on `games.rising.sh`.
 | Tug           | [deploy-tug.yml](../.github/workflows/deploy-tug.yml)                   | `games.rising.sh/tug/`          |
 | Reef          | [deploy-reef.yml](../.github/workflows/deploy-reef.yml)                 | `games.rising.sh/reef/`         |
 | Fen           | [deploy-fen.yml](../.github/workflows/deploy-fen.yml)                   | `games.rising.sh/fen/`          |
+| Ford          | [deploy-ford.yml](../.github/workflows/deploy-ford.yml)                 | `games.rising.sh/ford/`         |
 
 A workflow runs on a push to `main` that changes the game's folder, a
 `packages/` folder it imports, the lockfile, the tool versions or the workflow
