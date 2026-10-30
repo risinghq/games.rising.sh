@@ -36,6 +36,20 @@
         "vitest": "^2.1.0",
       },
     },
+    "games/border": {
+      "name": "border",
+      "version": "0.1.0",
+      "dependencies": {
+        "@rising/sim-kit": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^26.6.6",
+        "typescript": "^5.6.0",
+        "vite": "^6.0.0",
+        "vite-node": "^2.1.9",
+        "vitest": "^2.1.0",
+      },
+    },
     "games/fen": {
       "name": "fen",
       "version": "0.1.0",
@@ -601,6 +615,8 @@
     "battledrones": ["battledrones@workspace:games/battledrones"],
 
     "blake3-wasm": ["blake3-wasm@2.1.5", "", {}, "sha512-F1+K8EbfOZE49dtoPtmxUQrpXaBIl3ICvasLh+nJta0xkz+9kF/7uet9fLnwKqhDrmj6g+6K3Tw9yQPUg2ka5g=="],
+
+    "border": ["border@workspace:games/border"],
 
     "brace-expansion": ["brace-expansion@5.0.12", "", { "dependencies": { "balanced-match": "^4.0.2" } }, "sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ=="],
 
