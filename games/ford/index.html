@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ford</title>
+    <style>
+      :root {
+        --blue: #1d4ed8;
+        --red: #b91c1c;
+        --water: #dbeafe;
+        --ink: #0f172a;
+      }
+      body {
+        font:
+          16px/1.4 system-ui,
+          sans-serif;
+        color: var(--ink);
+        max-width: 36rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      h1 {
+        margin-bottom: 0.25rem;
+      }
+      .blue {
+        color: var(--blue);
+      }
+      .red {
+        color: var(--red);
+      }
+      #fords {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.5rem;
+        margin: 1rem 0;
+      }
+      fieldset {
+        border: 1px solid #cbd5e1;
+        border-radius: 0.5rem;
+        padding: 0.5rem;
+        margin: 0;
+        min-width: 0;
+      }
+      .track {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 2px;
+        margin-bottom: 0.5rem;
+      }
+      .track span {
+        height: 1.5rem;
+        background: var(--water);
+        border-radius: 0.25rem;
+      }
+      .track span.line {
+        background: var(--ink);
+      }
+      .track span.bank-blue {
+        border-bottom: 3px solid var(--blue);
+      }
+      .track span.bank-red {
+        border-bottom: 3px solid var(--red);
+      }
+      .state {
+        font-size: 0.85rem;
+        min-height: 2.4rem;
+      }
+      input[type="number"] {
+        font: inherit;
+        width: 4rem;
+      }
+      button,
+      label {
+        font: inherit;
+      }
+      button {
+        margin-right: 0.75rem;
+      }
+      #log {
+        min-height: 4rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Ford</h1>
+    <p>
+      Three river crossings. Each turn you and red secretly send your troops
+      across them at once; the larger force at a ford pushes its line. You are
+      <strong class="blue">blue</strong>. Hold two fords at your bank to win.
+    </p>
+    <form id="turn">
+      <div id="fords" role="group" aria-label="The fords"></div>
+      <p id="count" aria-live="polite"></p>
+      <p>
+        <button id="go" type="submit">Send</button>
+        <button id="again" type="button">New game</button>
+      </p>
+    </form>
+    <p id="hint"></p>
+    <p id="log" aria-live="polite"></p>
+    <p>
+      <label
+        >Opponent
+        <select id="foe"></select
+      ></label>
+    </p>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
