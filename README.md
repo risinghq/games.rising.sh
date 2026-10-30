@@ -19,6 +19,10 @@ at once. Its [rules](games/fen/RULES.md) fit one page.
 The fifth is [Ford](games/ford/), where both armies split their troops across
 three river fords at once. Its [rules](games/ford/RULES.md) fit one page.
 
+The sixth is [Border](games/border/), where two houses take turns smuggling
+crates through three passes while the other guesses which one. Its
+[rules](games/border/RULES.md) fit one page.
+
 ## Run a game
 
 Install [mise](https://mise.jdx.dev), then:
