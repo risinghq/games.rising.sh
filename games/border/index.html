@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Border</title>
+    <style>
+      :root {
+        --blue: #1d4ed8;
+        --red: #b91c1c;
+        --sand: #fef3c7;
+        --ink: #0f172a;
+      }
+      body {
+        font:
+          16px/1.4 system-ui,
+          sans-serif;
+        color: var(--ink);
+        max-width: 36rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      h1 {
+        margin-bottom: 0.25rem;
+      }
+      .blue {
+        color: var(--blue);
+      }
+      .red {
+        color: var(--red);
+      }
+      #rounds {
+        display: grid;
+        grid-template-columns: repeat(10, 1fr);
+        gap: 0.25rem;
+        padding: 0;
+        margin: 1rem 0;
+        list-style: none;
+      }
+      #rounds li {
+        min-height: 4rem;
+        padding: 0.25rem;
+        border: 2px solid transparent;
+        border-radius: 0.5rem;
+        background: var(--sand);
+        text-align: center;
+        font-size: 0.7rem;
+      }
+      #rounds li strong {
+        display: block;
+        font-size: 1.1rem;
+      }
+      #rounds li[aria-current="step"] {
+        border-color: var(--ink);
+      }
+      #rounds li.blue,
+      #rounds li.red {
+        color: #fff;
+      }
+      #rounds li.blue {
+        background: var(--blue);
+      }
+      #rounds li.red {
+        background: var(--red);
+      }
+      table {
+        border-collapse: collapse;
+        margin: 1rem 0;
+      }
+      th,
+      td {
+        padding: 0.25rem 1rem 0.25rem 0;
+        text-align: left;
+      }
+      fieldset {
+        border: 0;
+        padding: 0;
+        margin: 1rem 0;
+      }
+      #passes {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+      #passes label {
+        padding: 0.5rem 0.75rem;
+        border: 2px solid var(--ink);
+        border-radius: 0.5rem;
+      }
+      #passes label.fog {
+        border-style: dashed;
+        background: #e2e8f0;
+      }
+      #load-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.75rem;
+        margin: 1rem 0;
+      }
+      #load-row[hidden] {
+        display: none;
+      }
+      input[type="range"] {
+        flex: 1 1 10rem;
+      }
+      output {
+        min-width: 2ch;
+        font-weight: 700;
+      }
+      button,
+      select {
+        font: inherit;
+        padding: 0.5rem 1rem;
+      }
+      #hint,
+      #log {
+        min-height: 1.4em;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Border</h1>
+    <p>
+      Ten rounds. You and red take turns running crates through three passes
+      while the other side guards one. A guard on the runner's pass seizes the
+      crates for itself. Fog on one pass halves the guard's chance there. A load
+      scores its size squared.
+    </p>
+    <ol id="rounds" aria-label="Rounds"></ol>
+    <table>
+      <thead>
+        <tr>
+          <th scope="col"></th>
+          <th scope="col" class="blue">You</th>
+          <th scope="col" class="red">Red</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">Points</th>
+          <td id="points-blue"></td>
+          <td id="points-red"></td>
+        </tr>
+        <tr>
+          <th scope="row">Crates left</th>
+          <td id="stock-blue"></td>
+          <td id="stock-red"></td>
+        </tr>
+      </tbody>
+    </table>
+    <p id="hint"></p>
+    <form id="order">
+      <div id="load-row">
+        <label for="load">Crates to run</label>
+        <input id="load" type="range" min="0" value="2" />
+        <output id="amount" for="load">2</output>
+      </div>
+      <fieldset>
+        <legend id="legend"></legend>
+        <div id="passes"></div>
+      </fieldset>
+      <button id="go" type="submit"></button>
+    </form>
+    <p id="log" role="status" aria-live="polite"></p>
+    <fieldset>
+      <label for="foe">Red plays</label>
+      <select id="foe"></select>
+      <button id="again" type="button">New game</button>
+    </fieldset>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
