@@ -2,7 +2,7 @@ name: deploy border
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - games/border/**
       - packages/sim-kit/**

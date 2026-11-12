@@ -2,7 +2,7 @@ name: deploy battledrones
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - games/battledrones/**
       - packages/sim-kit/**
