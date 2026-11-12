@@ -2,7 +2,7 @@ name: deploy fen
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - games/fen/**
       - packages/sim-kit/**

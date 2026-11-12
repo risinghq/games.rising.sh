@@ -2,7 +2,7 @@ name: deploy index
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - apps/index/**
       - games/*/game.json

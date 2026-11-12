@@ -2,7 +2,7 @@ name: deploy tug
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - games/tug/**
       - packages/sim-kit/**

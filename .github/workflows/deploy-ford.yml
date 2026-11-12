@@ -2,7 +2,7 @@ name: deploy ford
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - games/ford/**
       - packages/sim-kit/**
