@@ -22,11 +22,23 @@ export function renderPage(games: Game[], css: string): string {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>Games</title>
+    <title>Games · rising.sh</title>
     <meta
       name="description"
       content="Open-source browser games with seeded simulations and batch playtests."
     />
+    <!-- No icon links: browsers fetch /favicon.ico and /apple-touch-icon.png
+         from public/ on their own, and the page loads nothing else. -->
+    <meta property="og:title" content="Games · rising.sh" />
+    <meta
+      property="og:description"
+      content="Open-source browser games with seeded simulations and batch playtests."
+    />
+    <meta property="og:url" content="https://games.rising.sh/" />
+    <meta property="og:image" content="https://games.rising.sh/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
     <style>
 ${css}
     </style>
