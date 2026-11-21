@@ -3,7 +3,9 @@
   "name": "games-index",
   "compatibility_date": "2026-10-01",
   // `bun run stage` copies dist/ to .deploy/, so index.html sits at the root of
-  // the assets. The route matches `/` only, so the game Workers keep their paths.
+  // the assets. The route takes every path, so the icons resolve and no path
+  // falls through to the zone's empty origin (a 522). Cloudflare picks the most
+  // specific route, so the game Workers keep their paths.
   "assets": { "directory": "./.deploy" },
-  "routes": [{ "pattern": "games.rising.sh/", "zone_name": "rising.sh" }],
+  "routes": [{ "pattern": "games.rising.sh/*", "zone_name": "rising.sh" }],
 }
