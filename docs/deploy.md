@@ -24,8 +24,8 @@ Wrangler warns that a game's routes serve assets on a path. It is expected.
 game's folder deploys that game, a `game.json` or `apps/index/` change also
 deploys the front page, and a change to `packages/`, the root `package.json`,
 the lockfile, `mise.toml`, the deploy tool or the workflow deploys everything.
-Each target deploys in its own matrix job, so one failed game does not block
-the others. A run by hand from the Actions tab takes a space-separated list of
+Each target deploys in its own matrix job, so one failed game does not block the
+others. A run by hand from the Actions tab takes a space-separated list of
 targets, or deploys all of them when the list is empty.
 
 ## One-time setup
