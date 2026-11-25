@@ -10,8 +10,9 @@ Each game is a static Cloudflare Worker with its own route on `games.rising.sh`.
 | Fen           | [deploy-fen.yml](../.github/workflows/deploy-fen.yml)                   | `games.rising.sh/fen/`          |
 | Ford          | [deploy-ford.yml](../.github/workflows/deploy-ford.yml)                 | `games.rising.sh/ford/`         |
 | Border        | [deploy-border.yml](../.github/workflows/deploy-border.yml)             | `games.rising.sh/border/`       |
+| Chroma        | [deploy-chroma.yml](../.github/workflows/deploy-chroma.yml)             | `games.rising.sh/chroma/`       |
 
-A workflow runs on a push to `main` that changes the game's folder, a
+A workflow runs on a push to `master` that changes the game's folder, a
 `packages/` folder it imports, the lockfile, the tool versions or the workflow
 itself. It also runs by hand from the Actions tab. It installs with
 `bun install --frozen-lockfile` and runs the game's `deploy` script:
