@@ -9,13 +9,13 @@ The game is imported from the build Simon Willison published at
 [simonw.github.io/pumpkin-farmer](https://simonw.github.io/pumpkin-farmer/).
 Upstream carries no licence. See [NOTICE](../../NOTICE).
 
-The code is plain ES modules with no build step. `src/sim/` holds the
-simulation, `src/render/` the three.js scene and `src/ui/` the interface.
-`?render=stub` swaps the 3D scene for `dev/stub-render.js`. The page loads
-three.js 0.170.0 from jsDelivr through an import map and its fonts from Google
-Fonts.
+The code is plain ES modules, built with Vite. `src/sim/` holds the simulation,
+`src/render/` the three.js scene and `src/ui/` the interface. `?render=stub`
+swaps the 3D scene for `dev/stub-render.js`. three.js comes from the `three`
+package, pinned to upstream's 0.170.0; upstream loaded it from jsDelivr through
+an import map. The page loads its fonts from Google Fonts.
 
 ```sh
-bun run serve pumpkin-farmer               # serve localhost:8000/pumpkin-farmer/
-bun run --cwd games/pumpkin-farmer build   # copies the game to dist/
+bun run --cwd games/pumpkin-farmer dev     # Vite dev server, reloads on edit
+bun run serve pumpkin-farmer               # the built game at localhost:8000/pumpkin-farmer/
 ```
