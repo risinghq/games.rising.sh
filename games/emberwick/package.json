@@ -5,9 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun run build && vite dist",
-    "build": "rm -rf dist && bun ./build.ts",
-    "stage": "rm -rf .deploy && mkdir .deploy && cp -r dist .deploy/emberwick",
-    "deploy": "bun run build && bun run stage && wrangler deploy"
+    "build": "rm -rf dist && bun ./build.ts"
   },
   "devDependencies": {
     "vite": "^6.0.0"

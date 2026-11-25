@@ -5,9 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "rm -rf dist && mkdir dist && cp index.html dist/",
-    "stage": "rm -rf .deploy && mkdir .deploy && cp -r dist .deploy/tree-appreciator",
-    "deploy": "bun run build && bun run stage && wrangler deploy"
+    "build": "rm -rf dist && mkdir dist && cp index.html dist/"
   },
   "devDependencies": {
     "vite": "^6.0.0"

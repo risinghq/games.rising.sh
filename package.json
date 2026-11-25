@@ -14,7 +14,9 @@
   "scripts": {
     "lint": "oxfmt --check .",
     "fix": "oxfmt .",
-    "check": "bun run lint && bun run --cwd packages/sim-kit check && bun run --cwd games/chroma check && bun run --cwd games/battledrones check && bun run --cwd apps/index check && bun run --cwd apps/index build"
+    "check": "bun run lint && bun test ./tools && bun run --filter '*' check",
+    "gate": "bun run --filter '*' gate",
+    "deploy": "bun tools/deploy.ts"
   },
   "devDependencies": {
     "oxfmt": "^0.75.0",
