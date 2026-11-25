@@ -32,7 +32,7 @@ declare const __SIM_HASH__: string | undefined;
 /** The sim this build plays (vite.config.ts; tools/arena/files.ts simHash), or null outside a Vite build. */
 export const BUILD_SIM: string | null = typeof __SIM_HASH__ === "undefined" ? null : __SIM_HASH__;
 declare const __VERSION_TAG__: string | null | undefined;
-/** The version tag this build is (v11: tools/build-pages.mjs), or null (main, and local builds). */
+/** The version tag this build is (v11: the VERSION_TAG env at build time), or null (untagged builds, as on games.rising.sh). */
 export const BUILD_TAG: string | null = typeof __VERSION_TAG__ === "undefined" ? null : __VERSION_TAG__;
 
 /** A keyframe every 30 s of game time. */
@@ -187,7 +187,7 @@ export const knownToMatch = (r: BattleRecord): boolean => r.sim === BUILD_SIM ||
 /** The replay's link in the version of the game its record is pinned to (null: not pinned, it's this one, or no link). */
 export function pinnedLink(feed: ReplayFeed): string | null {
   const v = feed.record.version;
-  // (the record's own word: only a version tag, as tools/build-pages.mjs publishes them)
+  // (the record's own word: only a version tag, as upstream's Pages archive published them)
   if (!v || v === BUILD_TAG || !feed.url || !/^v[0-9][A-Za-z0-9.+-]*$/.test(v)) return null;
   // the site's root: a version's build is a folder in it (/battledrones/v11/)
   const root = new URL(BUILD_TAG ? "../" : "./", new URL(import.meta.env.BASE_URL, location.href));

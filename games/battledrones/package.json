@@ -6,10 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "build:pages": "node tools/build-pages.mjs",
     "preview": "vite preview",
     "check": "tsc --noEmit && vitest run",
-    "test": "vitest run && node --test tools/pages-archive.test.mjs",
+    "test": "vitest run",
     "test:watch": "vitest",
     "smoke": "node tools/smoke.mjs",
     "maps": "vite-node tools/export-maps.ts",

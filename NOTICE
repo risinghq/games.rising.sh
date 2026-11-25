@@ -14,9 +14,10 @@ This repository includes Battle Drones, a browser strategy game.
 Upstream carries no copyright line of its own and no NOTICE file. The game's
 license is kept unchanged at games/battledrones/LICENSE.
 
-Changes to the upstream tree: progress-shots/, research_notes/ and
-package-lock.json are removed, and package.json gains the check, stage and
-deploy scripts. Later changes are in this repository's git history.
+Changes to the upstream tree: progress-shots/, research_notes/,
+package-lock.json, .github/ and the GitHub Pages archive build
+(tools/build-pages.mjs, tools/pages-archive.mjs) are removed, and package.json
+gains a check script. Later changes are in this repository's git history.
 
 The images the game ships were generated with an image model, except the HUD
 portraits, which are renders of the game's 3D models (see
