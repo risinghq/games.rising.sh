@@ -5,11 +5,6 @@ Each game is a static Cloudflare Worker with its own route on `games.rising.sh`.
 | Game          | Workflow                                                                | Route                           |
 | ------------- | ----------------------------------------------------------------------- | ------------------------------- |
 | Battle Drones | [deploy-battledrones.yml](../.github/workflows/deploy-battledrones.yml) | `games.rising.sh/battledrones/` |
-| Tug           | [deploy-tug.yml](../.github/workflows/deploy-tug.yml)                   | `games.rising.sh/tug/`          |
-| Reef          | [deploy-reef.yml](../.github/workflows/deploy-reef.yml)                 | `games.rising.sh/reef/`         |
-| Fen           | [deploy-fen.yml](../.github/workflows/deploy-fen.yml)                   | `games.rising.sh/fen/`          |
-| Ford          | [deploy-ford.yml](../.github/workflows/deploy-ford.yml)                 | `games.rising.sh/ford/`         |
-| Border        | [deploy-border.yml](../.github/workflows/deploy-border.yml)             | `games.rising.sh/border/`       |
 | Chroma        | [deploy-chroma.yml](../.github/workflows/deploy-chroma.yml)             | `games.rising.sh/chroma/`       |
 
 A workflow runs on a push to `master` that changes the game's folder, a
