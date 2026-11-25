@@ -12,7 +12,7 @@ import { join } from "node:path";
 const HOST = "games.rising.sh";
 const ZONE = "rising.sh";
 const COMPATIBILITY_DATE = "2026-10-01";
-const INDEX = "index";
+export const INDEX = "index";
 
 // A change under one of these paths can change every build.
 const SHARED = [
@@ -64,18 +64,26 @@ export function workerConfig(target: string) {
   };
 }
 
-async function deploy(root: string, target: string, dryRun: boolean) {
+/**
+ * Builds a target and lays it out as its Worker serves it:
+ * .deploy/<target>/assets/ is the site root, and a game's files sit under
+ * assets/<target>/ so they serve from /<target>/. Returns the stage folder.
+ */
+export async function stage(root: string, target: string): Promise<string> {
   const dir = join(root, target === INDEX ? "apps/index" : `games/${target}`);
   if (!existsSync(join(dir, "package.json")))
     throw new Error(`unknown target "${target}"`);
   await $`bun run build`.cwd(dir);
-  // A game's files go under assets/<name>/ so they serve from /<name>/.
   const stage = join(root, ".deploy", target);
   rmSync(stage, { recursive: true, force: true });
   const assets = join(stage, "assets", target === INDEX ? "" : target);
   mkdirSync(assets, { recursive: true });
   cpSync(join(dir, "dist"), assets, { recursive: true });
-  const config = join(stage, "wrangler.json");
+  return stage;
+}
+
+async function deploy(root: string, target: string, dryRun: boolean) {
+  const config = join(await stage(root, target), "wrangler.json");
   await Bun.write(config, JSON.stringify(workerConfig(target), null, 2));
   const flags = dryRun ? ["--dry-run"] : [];
   await $`bunx wrangler deploy --config ${config} ${flags}`.cwd(root);

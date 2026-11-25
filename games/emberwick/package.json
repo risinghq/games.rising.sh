@@ -4,10 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun run build && vite dist",
     "build": "rm -rf dist && bun ./build.ts"
-  },
-  "devDependencies": {
-    "vite": "^6.0.0"
   }
 }

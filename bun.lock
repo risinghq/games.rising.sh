@@ -54,23 +54,14 @@
     "games/emberwick": {
       "name": "emberwick",
       "version": "0.1.0",
-      "devDependencies": {
-        "vite": "^6.0.0",
-      },
     },
     "games/pumpkin-farmer": {
       "name": "pumpkin-farmer",
       "version": "0.1.0",
-      "devDependencies": {
-        "vite": "^6.0.0",
-      },
     },
     "games/tree-appreciator": {
       "name": "tree-appreciator",
       "version": "0.1.0",
-      "devDependencies": {
-        "vite": "^6.0.0",
-      },
     },
     "packages/sim-kit": {
       "name": "@rising/sim-kit",
