@@ -54,6 +54,12 @@ describe("loadGames", () => {
     expect(() => loadGames(gamesDir(files))).toThrow(message);
   });
 
+  it("lists every game in the root README", () => {
+    const readme = readFileSync(here("../../../README.md"), "utf8");
+    for (const game of loadGames(here("../../../games")))
+      expect(readme).toContain(`[${game.title}](games/${game.name}/)`);
+  });
+
   it("sorts by title", () => {
     const dir = gamesDir({
       b: { ...entry, name: "b", title: "Apple" },
