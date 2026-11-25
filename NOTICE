@@ -36,3 +36,41 @@ The upstream file tree-appreciator.html is imported unchanged as
 games/tree-appreciator/index.html. The license of simonw/tools is kept at
 games/tree-appreciator/LICENSE. The game loads three.js r128 from cdnjs and
 its fonts from Google Fonts at run time.
+
+This repository includes Emberwick, a browser adventure game.
+
+  Name:    Emberwick
+  Authors: Simon Willison
+  Source:  https://simonw.github.io/emberwick/v11/emberwick.html and the
+           files under https://simonw.github.io/emberwick/v11/src/
+  Fetched: 2026-11-25
+  SHA-256: 86d2fefc44cc82ca411d98da8ec44d4dec61af5a595f7619de90cc296951bbef
+           (emberwick.html)
+  License: none. Upstream publishes no license; all rights are reserved by
+           the author.
+  Path:    games/emberwick/
+
+The repository owner imported Emberwick without a license and accepts that
+risk. It will be removed if the author objects. games/emberwick/src/ holds the
+upstream source files unchanged. games/emberwick/shell.html is the published
+page with its module script replaced by a marker, and build.ts rebuilds the
+page from the two. The one change to the upstream files is a
+<meta charset="utf-8"> line added to shell.html. The game loads three.js 0.170.0 from jsDelivr and its fonts
+from Google Fonts at run time.
+
+This repository includes Pumpkin Farmer, a browser farming game.
+
+  Name:    Pumpkin Farmer (the page title is Quarter Sun Cove)
+  Authors: Simon Willison
+  Source:  https://simonw.github.io/pumpkin-farmer/
+  Fetched: 2026-11-25
+  SHA-256: b21737d6e68061f7652c38887b5462cb21862b5e3cec462ff8e84c41e66104d9
+           (index.html)
+  License: none. Upstream publishes no license; all rights are reserved by
+           the author.
+  Path:    games/pumpkin-farmer/
+
+The repository owner imported Pumpkin Farmer without a license and accepts
+that risk. It will be removed if the author objects. index.html, src/ and dev/
+are the published files, unchanged. The game loads three.js 0.170.0 from
+jsDelivr and its fonts from Google Fonts at run time.

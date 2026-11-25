@@ -1,0 +1,15 @@
+{
+  "name": "pumpkin-farmer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "rm -rf dist && mkdir dist && cp -r index.html src dev dist/",
+    "stage": "rm -rf .deploy && mkdir .deploy && cp -r dist .deploy/pumpkin-farmer",
+    "deploy": "bun run build && bun run stage && wrangler deploy"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}

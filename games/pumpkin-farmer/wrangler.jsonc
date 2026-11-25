@@ -1,0 +1,15 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "games-pumpkin-farmer",
+  "compatibility_date": "2026-10-01",
+  // `bun run stage` copies dist/ to .deploy/pumpkin-farmer/, so the page is
+  // served under the /pumpkin-farmer/ prefix the route matches.
+  "assets": { "directory": "./.deploy" },
+  "routes": [
+    { "pattern": "games.rising.sh/pumpkin-farmer", "zone_name": "rising.sh" },
+    {
+      "pattern": "games.rising.sh/pumpkin-farmer/*",
+      "zone_name": "rising.sh",
+    },
+  ],
+}

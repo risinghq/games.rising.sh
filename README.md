@@ -18,6 +18,12 @@ The third is [Tree Appreciator](games/tree-appreciator/), Simon Willison's calm
 unchanged from [simonw/tools](https://github.com/simonw/tools) at a pinned
 commit, recorded in [NOTICE](NOTICE).
 
+[Emberwick](games/emberwick/) is Simon Willison's 3D village adventure on the
+night its fires go out, and [Pumpkin Farmer](games/pumpkin-farmer/) is his
+giant-pumpkin farm on a foggy coast. Both are imported from the builds he
+published, as source files that build into the published page. Neither carries a
+licence; see [License](#license).
+
 ## Run a game
 
 Install [mise](https://mise.jdx.dev), then:
@@ -75,3 +81,8 @@ are renders of its 3D models, as
 [games/battledrones/ART.md](games/battledrones/ART.md) describes. Tree
 Appreciator is by Simon Willison under Apache 2.0, see
 [games/tree-appreciator/LICENSE](games/tree-appreciator/LICENSE).
+
+Emberwick and Pumpkin Farmer are by Simon Willison and carry no licence: all
+rights stay with him. They are imported at the repository owner's risk and will
+be removed if he objects. The Apache 2.0 licence of this repository does not
+cover them. [NOTICE](NOTICE) records where each came from.

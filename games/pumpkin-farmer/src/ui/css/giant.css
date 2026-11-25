@@ -1,0 +1,175 @@
+/* [slice: giant] styles for src/ui/giant.js: the Giant sheet (Care · Notebook · Rituals), its cards, Talk and
+   "...thanks". Reuses base.css tokens and components; every selector is scoped under a .giant- prefix. */
+
+.giant-tabs { margin: 2px 0 10px; }
+.giant-tab .section:first-child { margin-top: 0; }
+.giant-seg button { flex-direction: column; line-height: 1.1; padding: 4px 6px; }
+.giant-seg button span { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.giant-seg button small { font-size: 10px; font-weight: 700; color: var(--muted); }
+.giant-seg button.on small { color: var(--pumpkin-dark); }
+
+/* status: what she is doing and how wet she is */
+.giant-status { display: flex; gap: 12px; align-items: center; padding: 12px; border-radius: 16px; background: #fff; box-shadow: var(--shadow-sm); }
+.giant-status .glyph { width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; background: var(--pumpkin-soft); color: var(--pumpkin-dark); flex: none; }
+.giant-status .glyph .ico { width: 30px; height: 30px; }
+.giant-status .grow { flex: 1; min-width: 0; }
+.giant-status .big { font: 650 var(--fs-xl) Fraunces, Georgia, serif; color: var(--ink-strong); line-height: 1.1; }
+.giant-status .sub { font-size: var(--fs-s); color: var(--muted); font-weight: 700; margin-top: 2px; }
+.giant-meter { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.giant-meter .bar { position: relative; flex: 1; height: 10px; border-radius: 5px; background: var(--chip); overflow: visible; }
+.giant-meter .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 5px; transition: width 0.5s var(--ease), background 0.3s; }
+.giant-meter .fill.good { background: var(--sage); }
+.giant-meter .fill.warn { background: var(--warn); }
+.giant-meter .fill.bad { background: var(--bad); }
+.giant-meter .fill.wet { background: #5f8fa3; }
+.giant-meter .tick { position: absolute; top: -4px; width: 3px; height: 18px; margin-left: -1.5px; border-radius: 2px; background: var(--ink-strong); transition: left 0.4s var(--ease); }
+/* [C] the tick is Normal's mark, and says so (plain words) */
+.giant-meter .tick span { position: absolute; top: 18px; left: 50%; transform: translateX(-50%); font-size: 10px; font-weight: 800; color: var(--muted); white-space: nowrap; }
+.giant-meter { padding-bottom: 10px; }
+.giant-meter .mtxt { font-size: var(--fs-xs); font-weight: 800; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.giant-banner { margin-top: 8px; padding: 9px 12px; border-radius: 12px; font-weight: 700; font-size: var(--fs-s); background: var(--chip); color: var(--ink-strong);
+  display: flex; align-items: center; gap: 10px; }
+.giant-banner > span:first-child { flex: 1; min-width: 0; }
+.giant-banner .giant-soak { flex: none; min-height: 48px; padding: 0 12px; flex-direction: row; gap: 6px; max-width: 46%; }
+.giant-banner .giant-soak[hidden] { display: none; }
+.giant-banner .giant-soak > span:last-child { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15; text-align: left; }
+.giant-banner .giant-soak small { font-size: 11px; font-weight: 700; color: #8a3a28; }
+.giant-banner.warn { background: #f7e7c8; color: #7a5410; }
+.giant-banner.bad { background: #f3d6cd; color: #8a3a28; }
+
+/* care rows */
+.giant-line { display: flex; gap: 8px; align-items: stretch; }
+.giant-line .seg { flex: 1; min-width: 0; }
+.giant-line .btn { flex-direction: row; padding: 0 12px; min-width: 96px; }
+.giant-line .btn span:last-child { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.1; }
+.giant-line .btn small { font-size: 10.5px; font-weight: 700; opacity: 0.8; }
+.giant-soak.risky { border-color: var(--warn); background: #fbf1dd; }
+.giant-soak.risky small { color: #8a5d10; opacity: 1; }
+.giant-measure, .giant-knock { flex: 1; }
+.giant-measure[disabled] { opacity: 0.6; pointer-events: none; }
+.giant-row { display: flex; align-items: center; gap: 12px; min-height: 56px; border-bottom: 1px solid var(--line); }
+.giant-row:last-of-type { border-bottom: 0; }
+.giant-row .grow { flex: 1; min-width: 0; }
+.giant-row .title { font-weight: 800; color: var(--ink-strong); }
+.giant-row .desc { font-size: var(--fs-s); color: var(--muted); }
+.giant-row .desc.hot { color: var(--heat); font-weight: 800; }
+.giant-row .toggle { min-width: 52px; }
+.giant-row .toggle::before { content: ''; position: absolute; inset: -8px -4px; }      /* a 48px tap area around the 32px switch */
+.giant-extra { display: grid; gap: 8px; }
+.giant-extra .btn[hidden] { display: none; }
+.giant-free { margin-left: auto; background: #e3ead9; color: var(--sage-dark); min-height: 22px; font-size: 10.5px; }
+.section > .eyebrow .giant-free { letter-spacing: 0; text-transform: none; }
+.giant-start { min-height: 56px; font-size: var(--fs-l); }
+[data-control].pulse { border-radius: 14px; }
+
+/* notebook */
+.giant-chart { width: 100%; height: auto; display: block; border-radius: 14px; background: #fff; box-shadow: var(--shadow-sm); }
+.giant-chart text { font: 700 9px 'Nunito Sans', sans-serif; fill: var(--faint); }
+.giant-legend { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; font-size: var(--fs-xs); font-weight: 800; color: var(--muted); }
+.giant-legend .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--pumpkin); }
+.giant-legend .dash { width: 16px; height: 0; border-top: 2px dashed #a9b3ad; margin-left: 8px; }
+.giant-facts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.giant-ped .ledger-row .v { text-align: right; max-width: 64%; }
+.giant-badge { margin-top: 8px; display: inline-block; padding: 4px 10px; border-radius: 999px; background: #f3d6cd; color: #8a3a28; font-weight: 800; font-size: var(--fs-xs); }
+.giant-foot { margin-top: 10px; font-size: var(--fs-s); color: var(--muted); font-style: italic; }
+
+/* Talk: press and hold her */
+.giant-talk { position: absolute; left: 50%; bottom: calc(var(--sb) + var(--tray-h) + var(--sheet-h, 0px) + 14px); transform: translateX(-50%);
+  width: min(calc(100% - 2 * var(--gut)), 360px); padding: 12px; display: grid; gap: 8px; z-index: 5; animation: pop 0.3s var(--spring); }
+.giant-talk .choice b { font-family: Fraunces, Georgia, serif; font-weight: 500; font-style: italic; }
+.giant-thanks { position: fixed; left: 50%; top: 42%; transform: translate(-50%, -50%); z-index: 8; pointer-events: none;
+  font: italic 500 28px Fraunces, Georgia, serif; color: rgba(255, 250, 240, 0.92); text-shadow: 0 1px 12px rgba(40, 30, 20, 0.45); animation: giant-thanks 0.6s ease both; }
+@keyframes giant-thanks { 0% { opacity: 0; } 25% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
+
+/* decision cards */
+.giant-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.giant-chips .chip .ico { width: 16px; height: 16px; }
+.chip.gold { background: #f6e6b8; color: #7a5410; }
+.giant-hat { margin-top: 10px; width: 100%; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-radius: 14px;
+  border: 1px dashed var(--line); background: var(--paper); font-weight: 800; color: var(--muted); cursor: pointer; }
+.giant-hat.on { border-style: solid; border-color: var(--warn); background: #fbf1dd; color: #7a5410; }
+.giant-hat:active { transform: scale(0.98); }
+.choice.giant-wait { background: transparent; box-shadow: none; border-style: dashed; }
+.choice.giant-cull { flex-direction: row; align-items: center; gap: 10px; }
+.giant-cullic { width: 64px; height: 34px; display: block; flex: none; }
+.choice.giant-cull > div:last-child { display: flex; flex-direction: column; gap: 1px; }
+.giant-names { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 2px; }
+.giant-name { min-height: 44px; border: 1px solid var(--line); cursor: pointer; padding: 0 12px; }
+.giant-name.on { background: var(--pumpkin-soft); border-color: var(--pumpkin); color: var(--pumpkin-dark); }
+.giant-name.reroll { background: transparent; }
+.giant-name .ico { width: 16px; height: 16px; }
+.decision .field { margin-top: 10px; }
+.giant-boasts { margin-top: 10px; padding: 8px 12px; border-radius: 14px; background: #fff; box-shadow: var(--shadow-sm); }
+.giant-boasts .eyebrow { margin-bottom: 4px; }
+.giant-judges { margin-top: 8px; font-size: var(--fs-s); color: var(--muted); font-weight: 700; }
+
+/* the station's open-dot sits where the badge is: the open sheet already shows her state */
+[data-target="station:giant"].on .badge { display: none; }
+
+/* ------------------------------------------------------------------ [C] the care tab, restructured (plan §3.12, rulings R12)
+   The tape is a sticky bar at the sheet's top from the Vine Crawl; each control is one 56 px segmented control with a
+   14 px line under it saying what the picked option does; the newest control is first. */
+.giant-tapebar { position: sticky; top: 0; z-index: 2; margin: 0 -16px 8px; padding: 2px 16px 8px; background: var(--card-strong);
+  box-shadow: 0 6px 8px -8px rgba(40, 50, 45, 0.35); }
+.giant-tapebar .btn { min-height: 52px; }
+.giant-pace { margin-top: 6px; font-size: 14px; line-height: 1.3; font-weight: 700; color: var(--ink); }
+.giant-control .seg button { min-height: 56px; font-size: var(--fs-l); }
+.giant-why { margin-top: 6px; font-size: 14px; line-height: 1.32; font-weight: 600; color: var(--muted); min-height: 1.32em; }
+.giant-control.giant-shade .giant-row { margin-top: 6px; }
+.giant-control .eyebrow .giant-free { margin-left: auto; }
+.giant-status { padding: 10px 12px; }
+.giant-status .glyph { width: 40px; height: 40px; }
+.giant-status .glyph .ico { width: 26px; height: 26px; }
+
+/* the tin: three plain taps (lid, nick, mat) */
+.giant-tin .giant-start { flex-direction: row; justify-content: flex-start; gap: 12px; padding: 0 16px; text-align: left; }
+.giant-tin .giant-start > span:last-child { display: flex; flex-direction: column; line-height: 1.2; }
+.giant-tin .giant-start small { font-size: 13px; font-weight: 700; opacity: 0.9; }
+.giant-seedname { margin: 0 0 8px; font: italic 600 var(--fs-l) Fraunces, Georgia, serif; color: var(--pumpkin-dark); }
+.giant-dots { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
+.giant-dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
+.giant-dots i.done { background: var(--sage); }
+.giant-dots i.now { background: var(--pumpkin); transform: scale(1.2); }
+
+/* the Notebook's choices and what came of them */
+.giant-choices .ledger-row .v { text-align: right; max-width: 72%; }
+.giant-choices .ledger-row.receipt .v { font-style: italic; color: var(--muted); }
+
+/* the dawn: the bees out this morning, drawn (one lonely bee in fog shows the stakes) */
+.giant-bees { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 12px; border-radius: 16px; background: #fbf3dc; }
+.giant-bees .swarm { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 2px; min-height: 22px; }
+.giant-bee { width: 24px; height: 18px; animation: giant-buzz 0.9s ease-in-out infinite alternate; }
+.giant-bee:nth-child(2n) { animation-delay: -0.3s; } .giant-bee:nth-child(3n) { animation-delay: -0.6s; }
+.giant-bees .cnt { display: flex; flex-direction: column; align-items: center; line-height: 1; }
+.giant-bees .cnt b { font: 800 26px Fraunces, Georgia, serif; color: #7a5410; }
+.giant-bees .cnt span { font-size: 12px; font-weight: 800; color: #7a5410; }
+.giant-bees.lonely { background: #eef0ee; }
+.giant-bees.lonely .giant-bee { width: 30px; height: 22px; }
+@keyframes giant-buzz { from { transform: translate(0, 0) rotate(-6deg); } to { transform: translate(2px, -2px) rotate(6deg); } }
+@media (prefers-reduced-motion: reduce) { .giant-bee { animation: none; } }
+.giant-aside { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; font-style: italic; color: var(--muted); font-weight: 600; }
+.giant-aside .portrait { width: 32px; height: 32px; flex: none; }
+
+/* Moving Day: three mornings, each with Hal's forecast */
+.giant-moving .choice .mv { display: flex; align-items: center; gap: 12px; }
+.giant-moving .mvic { flex: none; width: 36px; height: 36px; border-radius: 12px; display: grid; place-items: center; background: var(--chip); }
+.giant-moving .mvic .ico { width: 24px; height: 24px; }
+.giant-moving .mvic.clear { background: #fbeac2; color: #9a6a10; }
+.giant-moving .mvic.patchy { background: #eef0e6; color: #6f7f4a; }
+.giant-moving .mvic.fog { background: #e6eaea; color: #5d6b6b; }
+.giant-moving .choice .mv > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.giant-moving .choice span { font-size: 14px; }
+
+/* [C] the Almanac in plain words (rulings R11): "give or take" under Hal's number, and each October weekend's crate */
+.fcday .p.gt { font-size: 11.5px; margin-top: -1px; }
+.octcal .c { position: relative; }
+.octcal .crate { position: absolute; right: 2px; bottom: 2px; width: 9px; height: 9px; border-radius: 2px; border: 1.5px solid #8a6e4e; background: #fff; }
+.octcal .crate.l1 { background: linear-gradient(to top, #e0843a 33%, #fff 33%); }
+.octcal .crate.l2 { background: linear-gradient(to top, #e0843a 66%, #fff 66%); }
+.octcal .crate.l3 { background: #e0843a; }
+.octlegend .crate { position: relative; display: inline-block; vertical-align: -1px; right: auto; bottom: auto; width: 9px; height: 9px; border-radius: 2px;
+  border: 1.5px solid #8a6e4e; background: linear-gradient(to top, #e0843a 66%, #fff 66%); }
+
+/* [C] the giant sheet stands a little taller than the 46vh default so the tape bar, her status and the newest controls fit a
+   390x844 phone without scrolling (the camera inset keeps her in view above it) */
+#sheet.giant { max-height: min(54vh, calc(100vh - var(--top-h) - var(--tray-h) - 70px)); }

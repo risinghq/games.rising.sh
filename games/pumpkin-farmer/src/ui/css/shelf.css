@@ -1,0 +1,33 @@
+/* [B] October's crates (ui/shelf.js): four crates that fill with big fruit (orange, left) and small fruit (gold, right) up to
+   their rim, the weekend's wants. Big on the Planting Table, small on a row's status. */
+.tb-crates:empty { display: none; }
+.crates { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px 8px; margin: 0 0 4px; }
+.crate { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 0; border: 0; background: none; font: inherit; color: var(--ink-strong); }
+.cr-box { position: relative; width: 100%; max-width: 76px; height: 34px; border-radius: 6px 6px 8px 8px; overflow: hidden;
+  background: repeating-linear-gradient(0deg, #e9dcc2 0 9px, #dccba9 9px 11px); border: 2px solid #b99a6c; box-shadow: inset 0 -3px 0 rgba(90, 60, 25, 0.12); }
+.cr-big, .cr-small { position: absolute; bottom: 0; width: 50%; height: 0; transition: height 0.25s var(--ease); }
+.cr-big { left: 0; background: radial-gradient(circle at 50% 35%, #ec9a52, #d8762c 70%); }
+.cr-small { right: 0; background: radial-gradient(circle at 50% 35%, #f6c46e, #e8a64a 70%); }
+/* last October (years 2+): a faint dashed line where each half's fill stood */
+.cr-lb, .cr-ls { position: absolute; width: 50%; height: 0; border-top: 2px dashed rgba(74, 54, 36, 0.55); pointer-events: none; }
+.cr-lb { left: 0; } .cr-ls { right: 0; }
+.cr-lb[hidden], .cr-ls[hidden] { display: none; }
+.cr-rim { position: absolute; left: 0; right: 0; top: 0; height: 3px; background: #8a6a3e; opacity: 0.55; }
+.cr-id { font-weight: 900; font-size: 14px; line-height: 1.1; margin-top: 2px; }
+.cr-lv { font-size: 13px; font-weight: 800; line-height: 1.1; color: var(--muted); text-transform: lowercase; }
+.crate.lv0 .cr-box { border-style: dashed; border-color: #c9b796; }
+.crate.lv1 .cr-lv { color: var(--warn); }
+.crate.lv2 .cr-lv { color: var(--sage-dark); }
+.crate.lv3 .cr-lv { color: var(--good); }
+.crate.lv3 .cr-box { border-color: #7d9a5a; box-shadow: 0 0 0 2px rgba(125, 154, 90, 0.25); }
+.crate.sel .cr-box { outline: 2.5px solid var(--pumpkin); outline-offset: 2px; }
+.crate.past { opacity: 0.75; }
+.crate.pulse .cr-box { animation: pulse 1.4s ease-in-out infinite; }
+.crate.plunk .cr-box { animation: plunk 0.35s var(--spring); }
+@keyframes plunk { 30% { transform: translateY(3px) scaleY(0.92); } }
+.cr-cap { grid-column: 1 / -1; min-height: 1.2em; font-size: 13px; font-weight: 700; color: var(--ink); text-align: center; line-height: 1.25; }
+.cr-cap:empty { display: none; }
+/* small, on a row's status: the crates keep filling all summer */
+.crates.compact { gap: 6px; margin-bottom: 6px; }
+.crates.compact .cr-box { height: 26px; max-width: 56px; border-width: 1.5px; }
+.crates.compact .cr-id { font-size: 13px; }

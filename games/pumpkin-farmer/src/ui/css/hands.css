@@ -1,0 +1,62 @@
+/* [E] The hands-on close-ups (plan §3.14): the overlay that takes every touch, the hint strip under the HUD, the Done chip
+   with its timer ring; and the bug hunt's panel in the Row sheet. Portrait 390x844 first: the strip's text is 16 px, the
+   Done chip 48 px, and everything below the strip is the playing field (the thumb's half of the screen stays clear). */
+
+/* ------------------------------------------------------------------ the close-up layer */
+#hands { position: fixed; inset: 0; z-index: 4; touch-action: none; -webkit-user-select: none; user-select: none;
+  animation: hands-in 0.25s var(--ease); }
+#hands.out { opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+@keyframes hands-in { from { opacity: 0; } to { opacity: 1; } }
+/* what steps aside: the tray, the Next-up chip, the weekend row, the pins, the dialogue, toasts and any sheet; the HUD dims */
+body.hands-open #tray, body.hands-open #nextup, body.hands-open #wkrow, body.hands-open #pins, body.hands-open #dialog,
+body.hands-open #toasts, body.hands-open #sheet-layer, body.hands-open #banner { visibility: hidden; }
+body.hands-open #hud { opacity: 0.7; pointer-events: none; transition: opacity 0.2s; }
+
+.hands-strip {
+  position: absolute; top: calc(var(--st) + var(--hud-h) + 6px); left: var(--sl); right: calc(var(--sr) + 56px);
+  min-height: 48px; display: flex; align-items: center; gap: 8px; padding: 4px 14px 4px 4px; border-radius: 24px;
+  background: var(--card-strong); border: var(--edge); box-shadow: var(--shadow-sm);
+  font: 700 16px/1.25 'Nunito Sans', system-ui, sans-serif; color: var(--ink-strong); pointer-events: none;
+}
+.hands-strip .portrait { width: 40px; height: 40px; border-width: 2px; }
+.hands-strip .portrait .initial { font-size: 18px; }
+.hands-face:empty { display: none; }
+.hands-text { flex: 1; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.hands-count { flex: none; font: 900 16px 'Nunito Sans', sans-serif; color: var(--pumpkin-dark); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hands-count:empty { display: none; }
+
+.hands-done {
+  position: absolute; top: calc(var(--st) + var(--hud-h) + 6px); right: var(--sr); width: 48px; height: 48px; padding: 0;
+  border-radius: 50%; border: var(--edge); background: var(--card-strong); box-shadow: var(--shadow-sm); color: var(--sage-dark);
+  display: grid; place-items: center; cursor: pointer;
+}
+.hands-done:active { transform: scale(0.94); }
+.hands-done .ico { width: 22px; height: 22px; }
+.hands-ring, .hands-ring svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.hands-ring svg { transform: rotate(-90deg); }
+.hands-ring circle { fill: none; stroke: var(--line); stroke-width: 3.5; }
+/* the ring empties as the timer runs (--left 1 -> 0); the last 30% goes pumpkin */
+.hands-ring circle.t { stroke: var(--sage); stroke-linecap: round; stroke-dasharray: 132; stroke-dashoffset: calc(132px * (1 - var(--left, 1))); }
+.hands-done.late .t { stroke: var(--pumpkin); }
+#hands.ending .hands-done { opacity: 0.5; }
+
+/* ------------------------------------------------------------------ the Row sheet's bug panel (the hunt's slot) */
+.huntbox .huntacts { display: grid; grid-template-columns: 1.15fr 1fr; gap: 8px; }
+.huntbox .btn { flex-direction: column; gap: 0; min-height: 56px; padding: 6px 10px; line-height: 1.15; }
+.huntbox .btn > span:first-child { display: inline-flex; align-items: center; gap: 6px; font-size: 16px; }
+.huntbox .btn .ico { width: 20px; height: 20px; }
+.huntbox .btn .sub { font-size: 14px; }   /* a consequence sub (rulings R12: 14-15 px) */
+
+/* the combo badge: one, over the last touch, bumped on every squish of a chain (chains never pile up words) */
+.hands-combo { position: absolute; left: 0; top: 0; margin: -22px 0 0 -30px; min-width: 60px; text-align: center; pointer-events: none;
+  font: 900 30px/1 'Nunito Sans', system-ui, sans-serif; color: var(--pumpkin-dark); opacity: 0;
+  text-shadow: 0 2px 0 #fff, 0 0 12px rgba(255, 255, 255, 0.9); transition: opacity 0.4s 0.5s; }
+.hands-combo.on { opacity: 1; transition: none; }
+.hands-combo.hit { animation: hands-combo 0.32s var(--spring); }
+@keyframes hands-combo { 0% { scale: 0.6; } 45% { scale: 1.25; } 100% { scale: 1; } }
+/* the ending's word: centred above the thumb area, big, then the camera goes back */
+.hands-big { position: absolute; left: 16px; right: 16px; top: 40%; text-align: center; pointer-events: none; opacity: 0;
+  font: 900 min(30px, 7.6vw)/1.15 'Nunito Sans', system-ui, sans-serif; color: var(--ink-strong);
+  text-shadow: 0 2px 0 #fff, 0 0 18px rgba(255, 255, 255, 0.95); }
+.hands-big.on { opacity: 1; animation: hands-combo 0.4s var(--spring); }
+.hands-big.good { color: var(--good); }

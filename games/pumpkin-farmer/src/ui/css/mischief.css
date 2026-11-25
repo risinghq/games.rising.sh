@@ -1,0 +1,25 @@
+/* [Track A] the visitors: the gold ✦ delight pin (plan §2.2: "something happened, have a look"; it breathes, it never
+   nags), the delight toasts and captions, and the Almanac's "who to expect" chips (text >= 13 px, chips >= 44 px tall). */
+:root { --gold: #e3b341; --gold-dark: #a87a12; --gold-soft: rgba(227, 179, 65, 0.22); }
+
+.pin.delight { border-color: var(--gold); color: var(--gold-dark); background: #fffaf0;
+  animation: pop 0.4s var(--spring), delightbreathe 2.6s 0.4s ease-in-out infinite; }
+.pin.delight::after { border-top-color: var(--gold); }
+.pin.delight .arrow::before { border-left-color: var(--gold); }
+.pin.delight .ico { width: 26px; height: 26px; filter: drop-shadow(0 0 3px rgba(227, 179, 65, 0.55)); }
+@keyframes delightbreathe { 50% { box-shadow: 0 0 0 9px var(--gold-soft), var(--shadow); transform-origin: 50% 100%; } }
+.reduce-motion .pin.delight { animation: none; }
+
+/* the caption over a visitor after a ✦ tap: a little warmer than a poke's */
+.caption-pop.delight { border-color: var(--gold); }
+
+/* the Almanac: who to expect in Hal's forecast days */
+.expect { display: flex; flex-wrap: wrap; gap: 8px; }
+.expect .xchip { min-height: 44px; display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 14px;
+  background: #fffaf0; border: 1.5px solid var(--gold); color: var(--ink-strong); font-size: max(13px, var(--fs-s)); line-height: 1.25; }
+.expect .xchip b { font-weight: 800; }
+.expect .xchip .when { color: var(--muted); font-weight: 700; }
+.expect .xchip .who { color: var(--gold-dark); font-weight: 700; }
+
+/* the winter shop: a bramble row Pamela grazed */
+.wi-item small.goat { display: block; color: var(--sage); font-weight: 700; }

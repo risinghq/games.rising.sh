@@ -6,6 +6,11 @@
     "games/battledrones/**",
     "games/tree-appreciator/index.html",
     "games/tree-appreciator/LICENSE",
+    "games/emberwick/shell.html",
+    "games/emberwick/src/**",
+    "games/pumpkin-farmer/index.html",
+    "games/pumpkin-farmer/src/**",
+    "games/pumpkin-farmer/dev/**",
     "bun.lock"
   ]
 }
