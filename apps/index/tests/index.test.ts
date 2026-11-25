@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { loadGames } from "../src/games.ts";
+import { loadElsewhere, loadGames } from "../src/games.ts";
 import { renderPage } from "../src/page.ts";
 
 const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
@@ -63,12 +63,56 @@ describe("loadGames", () => {
   });
 });
 
+describe("loadElsewhere", () => {
+  const hosted = {
+    title: "A",
+    blurb: "One line.",
+    author: "B",
+    url: "https://example.com/",
+  };
+  const file = (data: unknown) => {
+    const path = join(mkdtempSync(join(tmpdir(), "elsewhere-")), "e.json");
+    writeFileSync(path, JSON.stringify(data));
+    return path;
+  };
+
+  it("reads the real list", () => {
+    expect(loadElsewhere(here("../elsewhere.json")).length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["an object instead of a list", hosted, "expected an array"],
+    ["a url without https", [{ ...hosted, url: "http://x/" }], '"url"'],
+    ["a missing author", [{ ...hosted, author: "" }], '"author"'],
+    ["a blurb of two lines", [{ ...hosted, blurb: "x\ny" }], '"blurb"'],
+  ])("rejects %s", (_case, data, message) => {
+    expect(() => loadElsewhere(file(data))).toThrow(message);
+  });
+});
+
 describe("renderPage", () => {
   const games = [
     { name: "one", title: "One", blurb: "The first game." },
     { name: "two", title: "Two", blurb: "The second game." },
   ];
-  const html = renderPage(games, css);
+  const elsewhere = [
+    {
+      title: "Far",
+      blurb: "A hosted game.",
+      author: "Someone",
+      url: "https://example.com/far/",
+    },
+  ];
+  const html = renderPage(games, elsewhere, css);
+
+  it("links each hosted game at its url with its author", () => {
+    expect(html).toContain('<a href="https://example.com/far/">Far</a>');
+    expect(html).toContain("A hosted game. By Someone.");
+  });
+
+  it("leaves out the hosted section when the list is empty", () => {
+    expect(renderPage(games, [], css)).not.toContain("<section>");
+  });
 
   it("links each game at /<name>/ with its title and blurb", () => {
     for (const game of games) {
@@ -80,6 +124,7 @@ describe("renderPage", () => {
   it("escapes markup in a title and a blurb", () => {
     const page = renderPage(
       [{ name: "a", title: "<b>&", blurb: 'say "hi" <i>' }],
+      [],
       css,
     );
     expect(page).toContain("&lt;b&gt;&amp;");
@@ -96,7 +141,11 @@ describe("renderPage", () => {
   });
 
   it("stays under 20 KB with the real games", () => {
-    const real = renderPage(loadGames(here("../../../games")), css);
+    const real = renderPage(
+      loadGames(here("../../../games")),
+      loadElsewhere(here("../elsewhere.json")),
+      css,
+    );
     expect(Buffer.byteLength(real)).toBeLessThan(20 * 1024);
   });
 });

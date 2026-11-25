@@ -9,6 +9,44 @@ export interface Game {
   blurb: string;
 }
 
+/** A game its author hosts. Its code has no licence that lets this repo copy it. */
+export interface Elsewhere {
+  title: string;
+  blurb: string;
+  author: string;
+  url: string;
+}
+
+/**
+ * Reads the list of games hosted by their authors. Throws, naming the entry,
+ * when one is not valid. Keeps the file's order.
+ */
+export function loadElsewhere(file: string): Elsewhere[] {
+  const data: unknown = JSON.parse(readFileSync(file, "utf8"));
+  if (!Array.isArray(data)) throw new Error(`${file}: expected an array`);
+  return data.map((item: unknown, index) => {
+    const entry = item as Record<string, unknown> | null;
+    const problem = (field: string) =>
+      new Error(`${file} entry ${index}: ${field}`);
+    if (entry === null || typeof entry !== "object")
+      throw problem("expected an object");
+    const { title, blurb, author, url } = entry;
+    for (const [field, value] of Object.entries({ title, author }))
+      if (typeof value !== "string" || value.trim() === "")
+        throw problem(`"${field}" must be a non-empty string`);
+    if (typeof blurb !== "string" || blurb.trim() === "" || /\n/.test(blurb))
+      throw problem(`"blurb" must be one non-empty line`);
+    if (typeof url !== "string" || !url.startsWith("https://"))
+      throw problem(`"url" must start with https://`);
+    return {
+      title: title as string,
+      blurb,
+      author: author as string,
+      url,
+    };
+  });
+}
+
 /**
  * Reads games/<folder>/game.json for every folder in `dir`. Throws, naming the
  * folder, when a folder has no game.json or the file is not a valid entry.
