@@ -19,7 +19,7 @@ the page's dashes and ellipses. The page loads three.js 0.170.0 from jsDelivr
 and its fonts from Google Fonts.
 
 ```sh
-bun run --cwd games/emberwick dev     # build, then serve dist/
+bun run serve emberwick               # build, then serve localhost:8000/emberwick/
 bun run --cwd games/emberwick build   # writes dist/index.html
 ```
 

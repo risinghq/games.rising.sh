@@ -4,10 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
     "build": "rm -rf dist && mkdir dist && cp index.html dist/"
-  },
-  "devDependencies": {
-    "vite": "^6.0.0"
   }
 }

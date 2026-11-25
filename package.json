@@ -16,7 +16,8 @@
     "fix": "oxfmt .",
     "check": "bun run lint && bun test ./tools && bun run --filter '*' check",
     "gate": "bun run --filter '*' gate",
-    "deploy": "bun tools/deploy.ts"
+    "deploy": "bun tools/deploy.ts",
+    "serve": "bun tools/serve.ts"
   },
   "devDependencies": {
     "oxfmt": "^0.75.0",

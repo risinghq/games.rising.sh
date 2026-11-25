@@ -16,6 +16,6 @@ three.js 0.170.0 from jsDelivr through an import map and its fonts from Google
 Fonts.
 
 ```sh
-bun run --cwd games/pumpkin-farmer dev     # local server
+bun run serve pumpkin-farmer               # serve localhost:8000/pumpkin-farmer/
 bun run --cwd games/pumpkin-farmer build   # copies the game to dist/
 ```
