@@ -9,25 +9,9 @@ strategy game by [Simon Willison](https://github.com/simonw). It is imported
 from [simonw/battledrones](https://github.com/simonw/battledrones) at a pinned
 commit, recorded in [NOTICE](NOTICE).
 
-The second is [Tug](games/tug/), a tiny two-sided rope game that proves the
-shared [sim-kit](packages/sim-kit/) with a different rule set.
-
-The third is [Reef](games/reef/), a sealed-bid pearl-diving game. Its
-[rules](games/reef/RULES.md) fit one page.
-
-The fourth is [Fen](games/fen/), a marsh hunt where both hunters move and fire
-at once. Its [rules](games/fen/RULES.md) fit one page.
-
-The fifth is [Ford](games/ford/), where both armies split their troops across
-three river fords at once. Its [rules](games/ford/RULES.md) fit one page.
-
-The sixth is [Border](games/border/), where two houses take turns smuggling
-crates through three passes while the other guesses which one. Its
-[rules](games/border/RULES.md) fit one page.
-
-The seventh is [Chroma](games/chroma/), a Phaser shooting gallery where each
-duck takes the paint of its own colour and the wrong paint mixes into a new one.
-Its [rules](games/chroma/RULES.md) fit one page.
+The second is [Chroma](games/chroma/), a Phaser shooting gallery where each duck
+takes the paint of its own colour and the wrong paint mixes into a new one. Its
+[rules](games/chroma/RULES.md) fit one page.
 
 ## Run a game
 
@@ -68,10 +52,10 @@ bun run --cwd apps/index build   # writes apps/index/dist/index.html
   random numbers, the engine-independent maths, the state hash and the batch
   playtest helpers. A game never calls `Math.random`.
 
-Play a batch of seeded Tug matches and print win shares and draws:
+Play seeded Chroma runs with each scripted shooter and print their pacing:
 
 ```sh
-bun run --cwd games/tug batch --seeds 200
+bun run --cwd games/chroma batch
 ```
 
 [docs/deploy.md](docs/deploy.md) explains how a game reaches Cloudflare.
