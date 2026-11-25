@@ -21,3 +21,18 @@ deploy scripts. Later changes are in this repository's git history.
 The images the game ships were generated with an image model, except the HUD
 portraits, which are renders of the game's 3D models (see
 games/battledrones/ART.md).
+
+This repository includes Tree Appreciator, a browser spot-the-difference game.
+
+  Name:    Tree Appreciator
+  Authors: Simon Willison, generated with Claude Opus 5.5, per the upstream
+           commit message
+  Source:  https://github.com/simonw/tools
+  Commit:  dafb677a5d54a89c32a80d1c9b6a7ab7318d55c3
+  License: Apache License 2.0
+  Path:    games/tree-appreciator/
+
+The upstream file tree-appreciator.html is imported unchanged as
+games/tree-appreciator/index.html. The license of simonw/tools is kept at
+games/tree-appreciator/LICENSE. The game loads three.js r128 from cdnjs and
+its fonts from Google Fonts at run time.
