@@ -1,4 +1,4 @@
-import type { Elsewhere, Game } from "./games.ts";
+import type { Game } from "./games.ts";
 
 const escapeHtml = (text: string) =>
   text
@@ -7,11 +7,7 @@ const escapeHtml = (text: string) =>
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
 
-export function renderPage(
-  games: Game[],
-  elsewhere: Elsewhere[],
-  css: string,
-): string {
+export function renderPage(games: Game[], css: string): string {
   const items = games
     .map(
       (game) => `      <li>
@@ -20,24 +16,6 @@ export function renderPage(
       </li>`,
     )
     .join("\n");
-  const hosted = elsewhere
-    .map(
-      (game) => `        <li>
-          <h3><a href="${escapeHtml(game.url)}">${escapeHtml(game.title)}</a></h3>
-          <p>${escapeHtml(game.blurb)} By ${escapeHtml(game.author)}.</p>
-        </li>`,
-    )
-    .join("\n");
-  const section =
-    elsewhere.length === 0
-      ? ""
-      : `
-      <section>
-        <h2 class="section">Hosted by their authors</h2>
-        <ul>
-${hosted}
-        </ul>
-      </section>`;
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -73,7 +51,7 @@ ${css}
       </p>
       <ul>
 ${items}
-      </ul>${section}
+      </ul>
     </main>
   </body>
 </html>

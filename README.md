@@ -45,14 +45,6 @@ every game and links to it. Each game has a `games/<name>/game.json` with its
 `name` (the folder), `title` and one-line `blurb`. To add a game to the page,
 add its `game.json`. The tests fail when a folder under `games/` has none.
 
-A game whose code has no licence that lets this repo copy it stays on its
-author's site. [apps/index/elsewhere.json](apps/index/elsewhere.json) lists
-those games with a `title`, `blurb`, `author` and `url`, and the page links them
-under "Hosted by their authors". Emberwick and Pumpkin Farmer, from Simon
-Willison's
-[article](https://simonwillison.net/2026/Oct/28/vibe-game-development/), are
-there until they carry a licence.
-
 ```sh
 bun run --cwd apps/index build   # writes apps/index/dist/index.html
 ```
