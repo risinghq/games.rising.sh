@@ -2,87 +2,40 @@
 
 # games.rising.sh
 
-Open-source browser games with seeded simulations and batch playtests.
-
-The first game is [Battle Drones](games/battledrones/), a mobile real-time
-strategy game by [Simon Willison](https://github.com/simonw). It is imported
-from [simonw/battledrones](https://github.com/simonw/battledrones) at a pinned
-commit, recorded in [NOTICE](NOTICE).
-
-The second is [Chroma](games/chroma/), a Phaser shooting gallery where each duck
-takes the paint of its own colour and the wrong paint mixes into a new one. Its
-[rules](games/chroma/RULES.md) fit one page.
-
-The third is [Tree Appreciator](games/tree-appreciator/), Simon Willison's calm
-3D spot-the-difference game with a herbarium of finished trees. It is imported
-unchanged from [simonw/tools](https://github.com/simonw/tools) at a pinned
-commit, recorded in [NOTICE](NOTICE).
-
-[Emberwick](games/emberwick/) is Simon Willison's 3D village adventure on the
-night its fires go out, and [Pumpkin Farmer](games/pumpkin-farmer/) is his
-giant-pumpkin farm on a foggy coast. Both are imported from the builds he
-published, as source files that build into the published page. Neither carries a
-licence; see [License](#license).
-
-## Run a game
-
-Install [mise](https://mise.jdx.dev), then:
+Open-source browser games with seeded simulations and batch playtests. Each game
+is a static Vite build, served at `games.rising.sh/<name>/`. A game with a
+seeded simulation replays any run from its seed, and a pacing gate plays
+hundreds of seeded runs on every pull request.
 
 ```sh
 mise install
 bun install
-bun run --cwd games/battledrones dev
+bun run serve   # every game at http://localhost:8000/
 ```
 
-Vite prints the local URL. Each game is a Vite app with its own scripts:
+## Games
 
-```sh
-bun run --cwd games/battledrones check   # type check and unit tests
-bun run --cwd games/battledrones build   # writes games/battledrones/dist
-```
+- [Battle Drones](games/battledrones/): a mobile real-time strategy game by
+  Simon Willison. Two drone armies fight for territory; the sim is deterministic
+  and a balance gate plays AI skirmishes.
+- [Chroma](games/chroma/): a Phaser shooting gallery where the wrong paint mixes
+  and changes the duck. A pacing gate plays seeded runs per scripted shooter.
+- [Emberwick](games/emberwick/): Simon Willison's 3D village adventure on the
+  night its fires go out.
+- [Pumpkin Farmer](games/pumpkin-farmer/): Simon Willison's giant-pumpkin farm
+  on a foggy coast.
+- [Tree Appreciator](games/tree-appreciator/): Simon Willison's 3D
+  spot-the-difference game with a herbarium of finished trees.
 
-The game's own README lists its other tools, such as the AI pacing panel and the
-Playwright smoke scripts.
+## Documentation
 
-## Front page
-
-[apps/index](apps/index/) builds the front page, a static HTML page that lists
-every game and links to it. Each game has a `games/<name>/game.json` with its
-`name` (the folder), `title` and one-line `blurb`. To add a game to the page,
-add its `game.json`. The tests fail when a folder under `games/` has none.
-
-```sh
-bun run --cwd apps/index build   # writes apps/index/dist/index.html
-```
-
-## Layout
-
-- `games/<name>/` holds one game, as a bun workspace package.
-- `apps/index/` holds the front page.
-- `packages/` is for code shared by games. `packages/sim-kit` holds the seeded
-  random numbers, the engine-independent maths, the state hash and the batch
-  playtest helpers. A game with a seeded simulation never calls `Math.random`.
-  An imported game keeps its upstream code.
-
-Play seeded Chroma runs with each scripted shooter and print their pacing:
-
-```sh
-bun run --cwd games/chroma batch
-```
-
-[docs/deploy.md](docs/deploy.md) explains how a game reaches Cloudflare.
+[docs/](docs/README.md) holds the manual: the architecture, development
+commands, adding a game and deploying.
 
 ## License
 
-Apache 2.0, see [LICENSE](LICENSE). Battle Drones is by Simon Willison, also
-under Apache 2.0, see [games/battledrones/LICENSE](games/battledrones/LICENSE).
-Its images were generated with an image model, except the HUD portraits, which
-are renders of its 3D models, as
-[games/battledrones/ART.md](games/battledrones/ART.md) describes. Tree
-Appreciator is by Simon Willison under Apache 2.0, see
-[games/tree-appreciator/LICENSE](games/tree-appreciator/LICENSE).
-
-Emberwick and Pumpkin Farmer are by Simon Willison and carry no licence: all
-rights stay with him. They are imported at the repository owner's risk and will
-be removed if he objects. The Apache 2.0 licence of this repository does not
-cover them. [NOTICE](NOTICE) records where each came from.
+Apache 2.0, see [LICENSE](LICENSE). Battle Drones and Tree Appreciator keep
+their own Apache 2.0 licences in their folders. Emberwick and Pumpkin Farmer
+carry no licence: all rights stay with Simon Willison, the Apache 2.0 licence of
+this repository does not cover them, and they will be removed if he objects.
+[NOTICE](NOTICE) records where each game came from and what changed.

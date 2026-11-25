@@ -65,11 +65,3 @@ export CLOUDFLARE_ACCOUNT_ID=<account id>
 bun install
 bun run deploy <target>
 ```
-
-## Add a game
-
-Add a folder under `games/` with a `package.json` whose `build` script writes
-`dist/`, and a `game.json` so the front page lists it. Every game builds with
-Vite, with `base: "./"` so the build serves from `/<name>/`. A `check` script
-runs in `bun run check` and a `gate` script in `bun run gate`. The deploy needs
-nothing else: the next push to `master` that touches the folder deploys it.
