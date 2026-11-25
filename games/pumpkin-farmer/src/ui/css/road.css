@@ -1,0 +1,17 @@
+/* [D] The Next-stop chip (rulings R12): "May 20 · Plan October ⏭" in the Next-up slot when there's no goal. One tap target,
+   at least 44 px tall, text at 16 px, the ⏭ in a pumpkin circle: it is the dock's Skip, aimed at the stop. */
+.goal.nextstop { gap: 10px; padding: 0 5px 0 16px; background: var(--card); max-width: min(100%, 360px); }
+.goal.nextstop[hidden] { display: none; }
+.nextstop .ns-text { display: flex; align-items: baseline; gap: 7px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: max(16px, var(--fs-l)); line-height: 1.2; color: var(--ink-strong); }
+.nextstop .ns-when { font-weight: 900; color: var(--pumpkin-dark); }
+.nextstop .ns-dot { color: var(--muted); font-weight: 700; }
+.nextstop .ns-title { font-weight: 800; overflow: hidden; text-overflow: ellipsis; }
+.nextstop .ns-skip { flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--pumpkin); color: #fff;
+  box-shadow: var(--shadow-sm); }
+.nextstop .ns-skip .ico { width: 18px; height: 18px; }
+.nextstop.skipping .ns-skip { animation: nsgo 0.6s ease-in-out infinite; }
+.nextstop.go .ns-skip { animation: nstap 0.35s var(--spring); }
+@keyframes nsgo { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(3px); } }
+@keyframes nstap { 0% { transform: scale(0.85); } 100% { transform: scale(1); } }
+body.reduce-motion .nextstop .ns-skip { animation: none; }

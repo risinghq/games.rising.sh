@@ -1,0 +1,16 @@
+/* [D] Poke answers ride the shared caption (banner.css .caption-pop); a couple of looks of their own: a note from the biscuit
+   tin reads like paper, three foghorns in a row like an alarm. */
+.caption-pop.note { background: rgba(250, 244, 228, 0.97); color: #4a3a28; font-family: Georgia, 'Times New Roman', serif; font-style: italic;
+  border: 1px solid #d9c9a3; }
+.caption-pop.note::after { border-top-color: rgba(250, 244, 228, 0.97); }
+/* a locked thing's answer: what it is, then (in amber) the stop that opens it */
+.caption-pop.locked { white-space: pre-line; color: #f2c38f; }
+.caption-pop.locked::first-line { color: #f7f4ed; }
+.caption-pop.burst { background: rgba(181, 84, 63, 0.94); }
+/* the first idle: a gold star twinkles over one thing on the farm, an invitation to poke it (not a tap target) */
+.poke-hint { position: absolute; transform: translate(-50%, -100%); width: 34px; height: 34px; color: #f2c14e; pointer-events: none;
+  filter: drop-shadow(0 0 6px rgba(242, 193, 78, 0.9)); animation: pokehint 0.9s ease-in-out infinite; }
+.poke-hint .ico { width: 34px; height: 34px; fill: currentColor; }
+@keyframes pokehint { 0%, 100% { opacity: 0.35; scale: 0.75; } 50% { opacity: 1; scale: 1.15; } }
+body.reduce-motion .poke-hint { animation: none; }
+.caption-pop.burst::after { border-top-color: rgba(181, 84, 63, 0.94); }

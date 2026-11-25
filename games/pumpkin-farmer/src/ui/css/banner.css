@@ -1,0 +1,96 @@
+/* The shared moment components (plan §2.2, rulings R12): the banner (good news, lower third above the tray), the anchored
+   two-button bubble, the poke caption, the clock-stopped strip and the goal pulse. Phone first: 390x844 portrait. */
+
+/* ------------------------------------------------------------------ banner */
+#banner { position: absolute; left: var(--sl); right: var(--sr); bottom: calc(var(--sb) + var(--tray-h) + 10px);
+  display: flex; justify-content: center; pointer-events: none; }
+body.sheet-open #banner { bottom: calc(var(--sb) + var(--tray-h) + var(--sheet-h, 0px) + 10px); }
+.banner {
+  position: relative; pointer-events: auto; width: 100%; max-width: 440px; padding: 12px 16px 13px; cursor: pointer;
+  background: var(--card-strong); border: 2px solid var(--pumpkin); border-radius: 20px;
+  box-shadow: 0 14px 34px rgba(52, 64, 60, 0.26); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  transform: translateY(16px) scale(0.96); opacity: 0; transition: transform 0.38s var(--spring), opacity 0.22s;
+}
+.banner.in { transform: none; opacity: 1; }
+/* fading out it still catches taps (the quick second tap must not land on the farm), then it is removed */
+.banner.out { transform: translateY(10px) scale(0.98); opacity: 0; transition-duration: 0.3s; }
+.banner.big { border-color: #c9a227; background: linear-gradient(180deg, #fff8e6, var(--card-strong)); }
+.banner .b-title { font: 900 min(28px, 7.4vw)/1.1 'Nunito Sans', system-ui, sans-serif; letter-spacing: 0.02em; color: var(--pumpkin-dark);
+  padding-right: 58px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.banner.big .b-title { color: #9a6a12; }
+.banner .b-sub { margin-top: 3px; padding-right: 50px; font-size: max(16px, var(--fs-l)); font-weight: 700; line-height: 1.3; color: var(--ink-strong); }
+.banner .b-line { display: flex; gap: 10px; align-items: center; margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--line);
+  font-size: max(15px, var(--fs-m)); line-height: 1.35; color: var(--ink); font-style: italic; }
+.banner .b-line .portrait.small, .bubble .portrait.small { width: 40px; height: 40px; border-width: 2px; }
+.banner .b-line .portrait.small .initial, .bubble .portrait.small .initial { font-size: 18px; }
+.banner .stamp {
+  position: absolute; top: -14px; right: 10px; width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--pumpkin); color: #fff; border: 3px dashed rgba(255, 255, 255, 0.85); box-shadow: 0 0 0 3px var(--pumpkin), var(--shadow-sm);
+  transform: rotate(-20deg) scale(1.4); opacity: 0; transition: transform 0.32s var(--spring) 0.12s, opacity 0.2s 0.12s;
+}
+.banner.in .stamp { transform: rotate(-8deg); opacity: 1; }
+.banner.big .stamp { background: #c9a227; box-shadow: 0 0 0 3px #c9a227, var(--shadow-sm); }
+.banner .stamp .ico { width: 30px; height: 30px; }
+/* toasts step up out of the banner's way while it shows */
+#toasts { transition: transform 0.3s var(--ease); }
+body.banner-on #toasts { transform: translateY(calc(-1 * var(--banner-h, 120px) - 10px)); }
+body.reduce-motion .banner, body.reduce-motion .banner .stamp { transition: none; }
+
+/* ------------------------------------------------------------------ the anchored bubble (a card underneath) */
+#cards.on:has(> .decision.bubble) { display: block; background: rgba(40, 50, 45, 0.14); backdrop-filter: none; -webkit-backdrop-filter: none; }
+.decision.bubble {
+  position: absolute; left: 50%; top: 60%; transform: translate(-50%, -100%); margin: 0;
+  width: min(320px, calc(100vw - 32px)); max-width: none; overflow: visible; padding: 12px 12px 12px; border-radius: 18px;
+  background: var(--card-strong); border: 1px solid var(--line); box-shadow: 0 14px 34px rgba(52, 64, 60, 0.28);
+  animation: bubblein 0.26s var(--spring);
+}
+.decision.bubble.free { top: auto; bottom: calc(var(--sb) + var(--tray-h) + 12px); transform: translateX(-50%); }
+@keyframes bubblein { from { opacity: 0; margin-top: 10px; } to { opacity: 1; margin-top: 0; } }
+.bubble .bb-head { display: flex; gap: 10px; align-items: center; margin: 0 2px 10px; }
+.bubble .bb-title { font: 800 max(16px, var(--fs-l))/1.3 'Nunito Sans', system-ui, sans-serif; color: var(--ink-strong); }
+.bubble .bb-text { margin: -4px 2px 10px; font-size: max(15px, var(--fs-m)); line-height: 1.38; color: var(--ink); }
+.bubble .bb-choices { display: grid; gap: 8px; }
+.bubble .bb-choice {
+  min-height: 56px; width: 100%; padding: 8px 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--paper);
+  display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; text-align: left; cursor: pointer;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset, var(--shadow-sm); transition: transform 0.12s var(--ease);
+}
+.bubble .bb-choice:active { transform: scale(0.97); }
+.bubble .bb-choice b { font-size: max(16px, var(--fs-l)); font-weight: 800; color: var(--ink-strong); }
+.bubble .bb-choice span { font-size: max(14.5px, var(--fs-m)); font-weight: 600; line-height: 1.3; color: var(--muted); }
+.bubble .bb-choice.primary { background: var(--pumpkin); border-color: var(--pumpkin-dark); }
+.bubble .bb-choice.primary b, .bubble .bb-choice.primary span { color: #fff; }
+.bubble .bb-tail { position: absolute; left: 50%; bottom: -9px; width: 18px; height: 18px; margin-left: -9px; transform: rotate(45deg);
+  background: var(--card-strong); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+/* no room above its point (near the top of the screen): the bubble hangs below it, tail up */
+.decision.bubble.below { transform: translate(-50%, 0); }
+.bubble.below .bb-tail { bottom: auto; top: -9px; border: 0; border-left: 1px solid var(--line); border-top: 1px solid var(--line); }
+
+/* ------------------------------------------------------------------ the poke caption (anchored over what was tapped) */
+/* (width: max-content: placed by its centre, an absolute box near the right edge would otherwise shrink to the room left of
+   it and wrap a short line into a tall column) */
+.caption-pop {
+  position: absolute; transform: translate(-50%, -100%); width: max-content; max-width: min(300px, calc(100vw - 32px)); padding: 8px 13px; border-radius: 14px;
+  background: rgba(47, 58, 53, 0.92); color: #f7f4ed; font-size: max(15px, var(--fs-m)); font-weight: 700; line-height: 1.32; text-align: center;
+  box-shadow: var(--shadow); pointer-events: none; animation: captionin 0.22s var(--spring); transition: opacity 0.2s;
+}
+/* a caption with an onTap is a tap target: at least 44 px tall (rulings R12) */
+.caption-pop.tappable { pointer-events: auto; cursor: pointer; min-height: 44px; display: flex; align-items: center; justify-content: center;
+  text-decoration: underline dotted rgba(247, 244, 237, 0.5); }
+.caption-pop.out { opacity: 0; }
+.caption-pop::after { content: ''; position: absolute; left: 50%; bottom: -6px; margin-left: -6px; border: 6px solid transparent; border-bottom: 0;
+  border-top-color: rgba(47, 58, 53, 0.92); }
+@keyframes captionin { from { opacity: 0; margin-top: 6px; } to { opacity: 1; margin-top: 0; } }
+
+/* ------------------------------------------------------------------ the clock stopped (a planning sheet is open) */
+.clock-strip { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 6px 12px; margin: 0 0 10px; border-radius: 10px;
+  background: #3f4a52; color: #eef1ef; font-size: max(14px, var(--fs-m)); font-weight: 800; letter-spacing: 0.02em; }
+.clock-strip .ico { width: 16px; height: 16px; }
+/* (two drawn bars, not the ⏸ character: phones draw that as a colour emoji, and some fonts don't have it at all) */
+body.clock-stopped .hud-date b::after { content: ''; display: inline-block; width: 8px; height: 10px; margin-left: 6px; vertical-align: 1px;
+  box-sizing: border-box; border-left: 3px solid var(--muted); border-right: 3px solid var(--muted); }
+body.hurrying .hud-date b::after { content: ' »'; color: var(--pumpkin); }       /* a quiet day running at 2x */
+
+/* ------------------------------------------------------------------ the Next-up chip points (followGoal never taps for you) */
+.goal-ping { animation: goalping 0.5s ease-in-out 3 !important; }
+@keyframes goalping { 0%, 100% { box-shadow: 0 0 0 0 rgba(217, 120, 45, 0); } 50% { box-shadow: 0 0 0 7px rgba(217, 120, 45, 0.55); } }

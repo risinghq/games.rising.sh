@@ -7,6 +7,8 @@ Each game is a static Cloudflare Worker with its own route on `games.rising.sh`.
 | Battle Drones    | [deploy-battledrones.yml](../.github/workflows/deploy-battledrones.yml)         | `games.rising.sh/battledrones/`     |
 | Chroma           | [deploy-chroma.yml](../.github/workflows/deploy-chroma.yml)                     | `games.rising.sh/chroma/`           |
 | Tree Appreciator | [deploy-tree-appreciator.yml](../.github/workflows/deploy-tree-appreciator.yml) | `games.rising.sh/tree-appreciator/` |
+| Emberwick        | [deploy-emberwick.yml](../.github/workflows/deploy-emberwick.yml)               | `games.rising.sh/emberwick/`        |
+| Pumpkin Farmer   | [deploy-pumpkin-farmer.yml](../.github/workflows/deploy-pumpkin-farmer.yml)     | `games.rising.sh/pumpkin-farmer/`   |
 
 A workflow runs on a push to `master` that changes the game's folder, a
 `packages/` folder it imports, the lockfile, the tool versions or the workflow

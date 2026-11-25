@@ -70,8 +70,7 @@ h1 {
   text-wrap: balance;
 }
 
-h2,
-h3 {
+h2 {
   margin: 0;
   font-size: var(--text-lg);
   font-weight: var(--weight-strong);
@@ -86,16 +85,6 @@ p {
 
 .intro {
   color: var(--text-muted);
-}
-
-h2.section {
-  margin-top: var(--space-12);
-  color: var(--text-muted);
-  font-size: var(--text-base);
-}
-
-section ul {
-  margin-top: var(--space-2);
 }
 
 ul {

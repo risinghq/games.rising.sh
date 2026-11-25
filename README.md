@@ -18,6 +18,12 @@ The third is [Tree Appreciator](games/tree-appreciator/), Simon Willison's calm
 unchanged from [simonw/tools](https://github.com/simonw/tools) at a pinned
 commit, recorded in [NOTICE](NOTICE).
 
+[Emberwick](games/emberwick/) is Simon Willison's 3D village adventure on the
+night its fires go out, and [Pumpkin Farmer](games/pumpkin-farmer/) is his
+giant-pumpkin farm on a foggy coast. Both are imported from the builds he
+published, as source files that build into the published page. Neither carries a
+licence; see [License](#license).
+
 ## Run a game
 
 Install [mise](https://mise.jdx.dev), then:
@@ -44,14 +50,6 @@ Playwright smoke scripts.
 every game and links to it. Each game has a `games/<name>/game.json` with its
 `name` (the folder), `title` and one-line `blurb`. To add a game to the page,
 add its `game.json`. The tests fail when a folder under `games/` has none.
-
-A game whose code has no licence that lets this repo copy it stays on its
-author's site. [apps/index/elsewhere.json](apps/index/elsewhere.json) lists
-those games with a `title`, `blurb`, `author` and `url`, and the page links them
-under "Hosted by their authors". Emberwick and Pumpkin Farmer, from Simon
-Willison's
-[article](https://simonwillison.net/2026/Oct/28/vibe-game-development/), are
-there until they carry a licence.
 
 ```sh
 bun run --cwd apps/index build   # writes apps/index/dist/index.html
@@ -83,3 +81,8 @@ are renders of its 3D models, as
 [games/battledrones/ART.md](games/battledrones/ART.md) describes. Tree
 Appreciator is by Simon Willison under Apache 2.0, see
 [games/tree-appreciator/LICENSE](games/tree-appreciator/LICENSE).
+
+Emberwick and Pumpkin Farmer are by Simon Willison and carry no licence: all
+rights stay with him. They are imported at the repository owner's risk and will
+be removed if he objects. The Apache 2.0 licence of this repository does not
+cover them. [NOTICE](NOTICE) records where each came from.

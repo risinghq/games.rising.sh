@@ -1,0 +1,228 @@
+/* The patch slice: Row / Barn / Hives sheets, the ripeness forecast bar, the Water FAB, bug pins and the squish combo,
+   the shiny card. Reuses base.css tokens and components. */
+
+/* ------------------------------------------------------------------ variety dots */
+.vdot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; flex: none; box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.14); }
+.vdot.ring { background: transparent !important; border: 3px solid var(--pumpkin); box-shadow: none; }
+.vdot.soil { background: #c9b294; box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.1); }
+
+/* ------------------------------------------------------------------ the Row sheet */
+.rowsheet { padding-top: 0; }
+.rowtabs { display: flex; gap: 4px; margin: 0 -2px 6px; }
+.rowtab { flex: 1; min-width: 0; min-height: 44px; border-radius: 12px; border: 1px solid var(--line); background: #fff; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; color: var(--ink); font-size: var(--fs-s);
+  transition: transform 0.12s var(--ease), background 0.15s, border-color 0.15s; }
+.rowtab b { font-weight: 900; line-height: 1; }
+.rowtab:active { transform: scale(0.93); }
+.rowtab.on { background: var(--pumpkin-soft); border-color: var(--pumpkin); color: var(--ink-strong); box-shadow: 0 0 0 2px rgba(217, 120, 45, 0.18); }
+.rowtab.locked { background: var(--chip); color: var(--faint); }
+.rowtab.locked .ico { width: 14px; height: 14px; }
+.rowtab.bugs::after { content: ''; position: absolute; }
+.rowtab.bugs { position: relative; }
+.rowtab.bugs b::after { content: ''; position: absolute; top: 4px; right: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
+
+/* the forecast bar */
+.fbar-wrap { border-radius: 16px; background: #fbf8f1; box-shadow: var(--shadow-sm); padding: 6px 6px 3px; margin-bottom: 8px; }
+.fbar { display: block; overflow: visible; font-family: 'Nunito Sans', system-ui, sans-serif; }
+.fbar .lane { fill: #fff; stroke: #eee8db; stroke-width: 1; }
+.fbar .lane.sel { fill: #fff3e6; stroke: rgba(217, 120, 45, 0.55); stroke-width: 1.5; }
+.fbar .lane.ghostlane { fill: #fffaf2; stroke: var(--pumpkin); stroke-width: 1.2; stroke-dasharray: 3 2.5; }
+.fbar .lane.planned { stroke-dasharray: 3 2.5; }
+.fbar .wkband { fill: rgba(217, 120, 45, 0.09); }
+.fbar .wk { stroke: var(--pumpkin); stroke-width: 1.2; }
+.fbar .wk.good { fill: var(--pumpkin); }
+.fbar .wk.thin { fill: rgba(217, 120, 45, 0.4); }
+.fbar .wk.none { fill: #fff; stroke-dasharray: 2 2; }
+.fbar .wk.past { fill: var(--chip); stroke: var(--faint); }
+.fbar .wkl { font-size: 9.5px; font-weight: 900; fill: var(--pumpkin-dark); text-anchor: middle; letter-spacing: 0.02em; }
+.fbar .wo { stroke: var(--ink-strong); stroke-width: 1.2; stroke-dasharray: 2 2.5; }
+.fbar .wopin { fill: var(--ink-strong); }
+.fbar .wol { font-size: 8.5px; font-weight: 900; fill: var(--ink-strong); text-anchor: middle; text-transform: uppercase; letter-spacing: 0.06em; }
+.fbar .today { stroke: var(--sage); stroke-width: 2; }
+.fbar .g { stroke: #9bb57f; stroke-width: 4; stroke-linecap: butt; fill: none; }
+.fbar .p { fill: #e0843a; }
+.fbar .s { fill: #8a6448; }
+.fbar .p.ghost { fill: rgba(224, 132, 58, 0.62); stroke: #b9621f; stroke-width: 1; }
+.fbar .s.ghost { fill: rgba(138, 100, 72, 0.32); }
+.fbar .g.ghost { stroke: #b8cba1; }
+.fbar.picking { cursor: ew-resize; touch-action: pan-y; }
+.fbar .todayc { fill: var(--sage); }
+.fbar .axl.woax { fill: var(--ink-strong); font-weight: 900; }
+.fbar .wh { stroke: var(--ink-strong); stroke-width: 1.5; fill: none; }
+.fbar .whm { fill: var(--ink-strong); }
+.fbar .rowlab { cursor: pointer; }
+.fbar .rowlab text { font-size: 10px; font-weight: 900; fill: #fff; text-anchor: middle; paint-order: stroke; stroke: rgba(60, 40, 20, 0.35); stroke-width: 2px; }
+.fbar .rowlab.empty text { fill: var(--ink-strong); stroke: none; }
+.fbar .rowlab.sel circle { stroke: var(--ink-strong); stroke-width: 2; }
+.fbar .ghostdot { fill: #fff; stroke-width: 3; stroke-dasharray: 3 2; }
+.fbar .tick { stroke: var(--faint); }
+.fbar .axl { font-size: 9.5px; font-weight: 800; fill: var(--muted); text-anchor: middle; }
+.fbar .late { font-size: 9.5px; font-weight: 900; fill: var(--bad); text-anchor: end; }
+.fbar .early { font-size: 9.5px; font-weight: 800; fill: var(--muted); text-anchor: start; }
+.fbar-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; padding: 2px 4px 2px; font-size: var(--fs-xs); font-weight: 800; color: var(--muted); }
+.fbar-legend .k { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-left: 2px; }
+.fbar-legend .k.g { background: #9bb57f; } .fbar-legend .k.p { background: #e0843a; } .fbar-legend .k.s { background: #8a6448; }
+.fbar-legend .note { flex-basis: 100%; font-size: var(--fs-s); color: var(--ink); font-weight: 700; margin-top: 1px; }
+.fbar .draghint { font-size: 9px; font-weight: 900; fill: var(--pumpkin-dark); letter-spacing: 0.04em; animation: hintfade 1.6s ease-in-out infinite alternate; }
+@keyframes hintfade { from { opacity: 0.45; } }
+.fbar-legend .note b { color: var(--pumpkin-dark); }
+.fbar-legend .note b.bad, .warn { color: var(--bad); font-weight: 800; }
+
+/* picking a variety and a day */
+.vchips { display: flex; gap: 6px; overflow-x: auto; padding: 2px 2px 6px; margin: 0 -2px; scrollbar-width: none; scroll-snap-type: x proximity; }
+.vchips::-webkit-scrollbar { display: none; }
+.vchip { flex: none; min-height: 44px; padding: 4px 12px 4px 10px; border-radius: 14px; border: 1.5px solid var(--line); background: #fff; cursor: pointer; scroll-snap-align: start;
+  display: grid; grid-template-columns: auto auto; grid-template-rows: auto auto; column-gap: 7px; align-items: center; text-align: left; box-shadow: var(--shadow-sm);
+  transition: transform 0.12s var(--ease), border-color 0.15s, background 0.15s; }
+.vchip .vdot { grid-row: span 2; width: 16px; height: 16px; }
+.vchip .n { font-weight: 900; color: var(--ink-strong); font-size: var(--fs-m); line-height: 1.1; }
+.vchip .c { font-size: var(--fs-xs); font-weight: 800; color: var(--muted); line-height: 1.1; }
+.vchip:active { transform: scale(0.95); }
+.vchip.on { border-color: var(--pumpkin); background: var(--pumpkin-soft); box-shadow: 0 0 0 2px rgba(217, 120, 45, 0.18); }
+.vchip.locked { opacity: 0.45; box-shadow: none; }
+.vinfo { font-size: var(--fs-s); line-height: 1.4; color: var(--ink); margin: 2px 2px 8px; }
+.vinfo .fad { display: inline-block; padding: 0 7px; border-radius: 999px; background: #3b2f45; color: #f6c66b; font-weight: 900; font-size: var(--fs-xs); }
+.acts { display: grid; gap: 8px; margin-top: 4px; }
+.acts.two { grid-template-columns: 1fr 1fr; }
+.acts .btn { flex-direction: column; gap: 0; padding: 6px 12px; line-height: 1.15; }
+.acts .btn > span:first-child { display: inline-flex; align-items: center; gap: 6px; }
+.acts .btn .ico { width: 18px; height: 18px; }
+.btn.gran { background: #fff8ec; border-color: #ecd2b4; }
+.btn.small { min-height: 44px; padding: 4px 12px; font-size: var(--fs-s); flex-direction: column; gap: 0; line-height: 1.1; }
+.btn.replant { margin-top: 6px; width: 100%; }
+
+/* a planted row's status */
+.status { display: grid; gap: 4px; margin-bottom: 8px; }
+.st-line { display: flex; align-items: center; gap: 8px; font-size: var(--fs-m); color: var(--ink); line-height: 1.3; }
+.st-line .ico { color: var(--sage-dark); }
+.st-line b { color: var(--ink-strong); }
+.meters { display: grid; grid-template-columns: auto 1fr auto 1fr; align-items: center; gap: 6px 8px; margin: 4px 0 8px; font-size: var(--fs-xs); font-weight: 900; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.meters:has(.mv) { grid-template-columns: auto 1fr auto; }
+.meter2 { height: 9px; border-radius: 5px; background: var(--chip); overflow: hidden; }
+.meter2 i { display: block; height: 100%; border-radius: 5px; background: #6aa0b8; transition: width 0.4s var(--ease); }
+.meter2.good i { background: var(--good); } .meter2.warn i { background: var(--warn); } .meter2.bad i { background: var(--bad); }
+.meters .mv { color: var(--ink-strong); font-variant-numeric: tabular-nums; }
+.alertbox { display: grid; gap: 8px; padding: 10px 12px; margin: 4px 0 10px; border-radius: 14px; background: #fbeee6; border: 1px solid #efcdb8; font-size: var(--fs-m); color: var(--ink); }
+.alertbox.mildew { background: #f1f2ec; border-color: #dfe1d4; }
+.alertbox.cleared { background: #eef3e6; border-color: #d3dfc2; box-sizing: border-box; align-content: center; }
+.alertbox .btn.small { justify-self: start; }
+
+/* ------------------------------------------------------------------ squash bugs: 3 buttons, chain a combo */
+.squish { display: flex; gap: 10px; justify-content: center; }
+.bugbtn { width: 52px; height: 52px; border-radius: 50%; border: 3px solid #fff; background: #e9ddc4; box-shadow: var(--shadow); cursor: pointer; display: grid; place-items: center;
+  animation: bugpop 0.35s var(--spring) both; touch-action: manipulation; }
+.bugbtn .ico { width: 34px; height: 34px; animation: wiggle 0.5s ease-in-out infinite alternate; }
+.bugbtn:active { transform: scale(0.88); }
+.bugbtn.squished { animation: splat 0.32s ease-out forwards; cursor: default; }   /* still catches taps (see squishTap) */
+@keyframes bugpop { from { transform: scale(0.2) translateY(14px); opacity: 0; } }
+@keyframes wiggle { from { transform: rotate(-8deg); } to { transform: rotate(8deg) translateY(-1px); } }
+@keyframes splat { 0% { transform: scale(1); } 40% { transform: scale(1.3, 0.6); background: #b9c98a; } 100% { transform: scale(0.2); opacity: 0; } }
+.squish-pop { position: absolute; transform: translate(-50%, -100%); pointer-events: auto; z-index: 3; padding: 6px; border-radius: 40px; background: rgba(251, 250, 246, 0.6);
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); transition: opacity 0.2s, transform 0.2s; }
+.squish-pop .squish { gap: 12px; }
+.squish-pop.out { opacity: 0; transform: translate(-50%, -110%) scale(0.9); }
+/* the bug pin gets a bug glyph (pins draw named icons; the bug isn't in the shared set) */
+.pin[aria-label^="Squash bugs"] { border-color: var(--bad); }
+.pin[aria-label^="Squash bugs"] > .ico { opacity: 0; }
+.pin[aria-label^="Squash bugs"]::before { content: ''; position: absolute; inset: 7px; background: center / contain no-repeat
+  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cellipse cx='12' cy='13.5' rx='5.2' ry='6.6' fill='%233a2f28'/%3E%3Ccircle cx='12' cy='6' r='2.6' fill='%232a221d'/%3E%3Cpath d='M7 10.5L3.5 8.5M7 14H3M7.5 17.5l-3 2.5M17 10.5l3.5-2M17 14h4M16.5 17.5l3 2.5' stroke='%232a221d' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
+  animation: wiggle 0.45s ease-in-out infinite alternate; }
+.pin[aria-label^="Squash bugs"]::after { border-top-color: var(--bad); }
+.pin[aria-label^="Collect honey"] { border-color: #d9a443; color: #b9862a; }
+.pin[aria-label^="A shiny"] { border-color: #f2c14e; color: #c98a1c; box-shadow: 0 0 0 4px rgba(255, 238, 170, 0.5), var(--shadow); }
+
+/* ------------------------------------------------------------------ the Water FAB */
+.fab.water { background: #4f8fa8; box-shadow: 0 3px 0 #3a6f84, 0 10px 22px rgba(79, 143, 168, 0.42); }
+.fab.thirsty { background: var(--heat); box-shadow: 0 3px 0 #a3432c, 0 10px 22px rgba(201, 85, 58, 0.45); animation: thirst 1.3s ease-in-out infinite; }
+@keyframes thirst { 50% { transform: scale(1.06); } }
+
+/* ------------------------------------------------------------------ Barn and Hives sheets */
+.barnsheet .row-item .vdot, .hivesheet .row-item .vdot { width: 16px; height: 16px; }
+.barnsheet .row-item .btn.small { min-width: 64px; }
+.hivesheet .today { margin-bottom: 8px; }
+
+/* ------------------------------------------------------------------ the shiny card */
+.shiny-card { position: relative; }
+.shiny-art { display: grid; place-items: center; margin: -6px 0 2px; }
+.shiny-art svg { width: 108px; height: 108px; overflow: visible; filter: drop-shadow(0 6px 10px rgba(217, 120, 45, 0.35)); }
+.shiny-art .glow { animation: shinybob 2.2s ease-in-out infinite; transform-origin: 50% 60%; }
+.shiny-art .tw { animation: twinkle 1.2s ease-in-out infinite; transform-origin: 82px 28px; }
+.shiny-art .tw.b { animation-delay: 0.5s; transform-origin: 16px 37px; }
+@keyframes shinybob { 50% { transform: translateY(-4px) scale(1.03); } }
+@keyframes twinkle { 0%, 100% { opacity: 0.2; transform: scale(0.6); } 50% { opacity: 1; transform: scale(1.15); } }
+
+/* Gran's plan chip, and the sticky footer that keeps the main action in reach */
+.vchip.gran { background: #fff8ec; border-color: #ecd2b4; }
+.vchip.gran .gi { grid-row: span 2; color: var(--pumpkin); display: grid; }
+.rowfoot { position: sticky; bottom: -16px; margin: 6px -16px -16px; padding: 8px 16px calc(10px + 2px); display: flex; gap: 8px; align-items: center;
+  background: linear-gradient(180deg, rgba(250, 248, 243, 0.85), var(--card-strong) 30%); border-top: 1px solid var(--line); z-index: 1; }
+.rowfoot[hidden] { display: none; }
+.daypick { display: flex; align-items: center; gap: 2px; flex: none; }
+.daypick .iconbtn { width: 44px; height: 44px; }
+.daypick .iconbtn[disabled] { opacity: 0.3; }
+.daypick .daylabel { min-width: 58px; display: flex; flex-direction: column; align-items: center; line-height: 1.05; }
+.daypick .daylabel b { font-family: Fraunces, Georgia, serif; font-weight: 650; font-size: var(--fs-l); color: var(--ink-strong); white-space: nowrap; }
+.daypick .daylabel small { font-size: var(--fs-xs); font-weight: 800; color: var(--muted); min-height: 1em; }
+.btn.plant { flex: 1; min-width: 0; min-height: 52px; flex-direction: column; gap: 0; line-height: 1.15; padding: 4px 10px; }
+.btn.plant > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+/* ------------------------------------------------------------------ [B] the Planting Table (rulings R3): a tall sheet with the
+   clock stopped; the chalk, the row tabs, the crates, the drag strip, the weekend chips, the variety toggle, a sticky Plant */
+#sheet.table { max-height: min(var(--table-vh, 69vh), calc(100vh - var(--top-h) - var(--tray-h) - 24px)); }
+#sheet.table .sheet-head { padding-bottom: 4px; }
+.tb-top:empty { display: none; }
+.tb-top .clock-strip { min-height: 24px; padding: 2px 10px; margin-bottom: 6px; font-size: 14px; }
+.tb-coach { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; padding: 4px 10px 4px 4px; border-radius: 14px; background: #f4efe2;
+  border: 1px solid #e6dcc6; font-size: 15px; line-height: 1.25; color: var(--ink-strong); font-weight: 700; }
+.tb-coach .portrait.small { width: 36px; height: 36px; border-width: 2px; }
+.rowtab { gap: 0; padding: 3px 0; }
+.rowtab .rt-n { display: flex; align-items: center; gap: 4px; }
+.rowtab .rt-w { font-size: 13px; font-weight: 800; line-height: 1.1; color: var(--muted); }
+.rowtab.on .rt-w { color: var(--pumpkin-dark); }
+.tb-main:empty { display: none; }
+/* the strip: Sep 1 - Oct 31, drag the ripe window onto the weekends */
+.tb-strip { position: relative; margin: 0 0 4px; border-radius: 14px; background: #fbf8f1; box-shadow: var(--shadow-sm); padding: 4px 0 2px;
+  touch-action: none; cursor: ew-resize; user-select: none; }
+.tb-strip svg { display: block; width: 100%; height: auto; overflow: visible; }
+.tb-strip .sw { fill: rgba(217, 120, 45, 0.1); stroke: rgba(217, 120, 45, 0.35); stroke-width: 1; }
+.tb-strip .sw.on { fill: rgba(217, 120, 45, 0.24); stroke: var(--pumpkin); stroke-width: 1.5; }
+.tb-strip .sw.pulse { animation: swpulse 1.2s ease-in-out infinite; }
+@keyframes swpulse { 50% { fill: rgba(217, 120, 45, 0.38); } }
+.tb-strip .swl { font-size: 11px; font-weight: 900; fill: var(--pumpkin-dark); text-anchor: middle; }
+.tb-strip .swl.on { fill: var(--ink-strong); }
+.tb-strip .saxis { stroke: var(--line); stroke-width: 1.5; }
+.tb-strip .sax { font-size: 10px; font-weight: 800; fill: var(--muted); }
+.tb-strip .sripe { opacity: 0.92; stroke: rgba(80, 45, 15, 0.35); stroke-width: 1; }
+.tb-strip .sglow { opacity: 0.45; }
+.tb-strip .sother { opacity: 0.7; }
+.tb-strip .shandle circle { fill: #fff; stroke: var(--ink-strong); stroke-width: 2; }
+.tb-strip .shandle path { stroke: var(--ink-strong); stroke-width: 2; stroke-linecap: round; }
+.tb-strip .shint { font-size: 13px; font-weight: 800; fill: var(--muted); }
+/* the weekend chips (the tap-only way) and the variety toggle */
+.tb-chips { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 0 0 4px; }
+.tb-chip { min-height: 56px; border-radius: 12px; border: 1.5px solid var(--line); background: #fff; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; line-height: 1.1; cursor: pointer; color: var(--ink-strong); transition: transform 0.12s var(--ease), background 0.15s; }
+.tb-chip b { font-weight: 900; font-size: 15px; }
+.tb-chip small { font-size: 13px; font-weight: 700; color: var(--muted); }
+.tb-chip.on { background: var(--pumpkin-soft); border-color: var(--pumpkin); box-shadow: 0 0 0 2px rgba(217, 120, 45, 0.18); }
+.tb-chip:disabled { opacity: 0.45; cursor: default; background: var(--chip); }
+.tb-chip:active:not(:disabled) { transform: scale(0.95); }
+.tb-vars { display: flex; gap: 6px; margin: 0 0 4px; overflow-x: auto; scrollbar-width: none; }
+.tb-vars::-webkit-scrollbar { display: none; }
+.tb-var { flex: 1 1 0; min-width: 150px; min-height: 46px; border-radius: 14px; border: 1.5px solid var(--line); background: #fff; padding: 4px 8px; text-align: left;
+  display: flex; flex-direction: column; justify-content: center; cursor: pointer; }
+.tb-var .tv-n { display: flex; align-items: center; gap: 6px; }
+.tb-var .tv-n b { font-weight: 900; font-size: 15px; color: var(--ink-strong); }
+.tb-var .tv-n i { font-style: normal; font-weight: 800; font-size: 13px; color: var(--muted); margin-left: auto; }
+.tb-var small { font-size: 13px; font-weight: 700; color: var(--muted); line-height: 1.2; }
+.tb-var.on { background: var(--pumpkin-soft); border-color: var(--pumpkin); }
+.sheet-head .tb-headmore { margin: 0 6px 0 auto; min-height: 44px; font-size: 14px; flex: none; }
+.tb-details[hidden] { display: none; }
+.tb-details .fbar-wrap { margin-top: 4px; }
+.tb-acts { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px; }
+.tb-acts .btn.small { min-height: 44px; }
+#sheet.table .rowtabs { margin-bottom: 6px; }
+.rowfoot .tb-clear { flex: none; min-height: 52px; padding: 0 14px; }
+/* the Table's foot says what happens and what to do ("Classic · $60 that morning", "Drag row 2's ripe window, or tap a
+   weekend"): a consequence line, so 14 px on a phone (rulings R12), not the 11 px of an ordinary button's sub */
+#sheet.table .rowfoot .btn.plant .sub { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }

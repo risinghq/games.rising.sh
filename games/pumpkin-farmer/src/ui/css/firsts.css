@@ -1,0 +1,5 @@
+/* [D] Firsts use the shared banner (banner.css). Grandpa's notes (speaker 'grandpa') read like his handwriting on paper. */
+.talk.note { background: #fbf6e8; border-color: #e3d4ae; }
+.talk.note .line { font-family: Georgia, 'Times New Roman', serif; font-style: italic; color: #4a3a28; }
+.talk.note .portrait { background: #f1e6c8; }
+.talk.note .portrait .initial { font-family: Georgia, 'Times New Roman', serif; font-style: italic; color: #8a6a3e; }

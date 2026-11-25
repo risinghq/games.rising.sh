@@ -21,3 +21,5 @@ jobs:
       - run: bun run --cwd games/chroma build
       - run: bun run --cwd games/chroma gate
       - run: bun run --cwd games/tree-appreciator build
+      - run: bun run --cwd games/emberwick build
+      - run: bun run --cwd games/pumpkin-farmer build

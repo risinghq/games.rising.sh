@@ -1,0 +1,163 @@
+/* [slice: weighoff] the weigh-off cinematic (src/ui/weighoff.js). The overlay passes taps through to the diorama and the
+   world pins; only its panel, ribbon and buttons take them. The dock (FAB) and the dialogue cards stay above it. */
+
+/* cinematic mode: the HUD steps aside, the dialogue and the dock float above the overlay */
+body.wo-cine #game-ui { z-index: 5; }
+body.wo-cine #hud { opacity: 0; pointer-events: none; transition: opacity 0.4s; }
+body.wo-cine.wo-results #hud { opacity: 1; pointer-events: auto; }
+/* results bring the HUD back (the prize money lands in the cash); the leaderboard steps down under it */
+body.wo-cine.wo-results .wo-board { top: calc(var(--st) + 60px); }
+body.wo-cine #wkrow, body.wo-cine #stations { display: none; }
+body.wo-cine #toasts { bottom: var(--wo-toasts, 50%); }
+body.wo-cine .dock-note, body.wo-cine .home-btn { visibility: hidden; }
+.fab.wo-hide { visibility: hidden; pointer-events: none; }
+body.wo-cine.wo-nofab #tray { visibility: hidden; }
+
+.screen.wo { position: fixed; inset: 0; pointer-events: none; }
+.wo > * { pointer-events: none; }
+.wo .wo-panel, .wo .wo-board, .wo button, .wo .wo-eye { pointer-events: auto; }
+.wo.wo-dim::before { content: ''; position: absolute; inset: 0; background: radial-gradient(60% 45% at 30% 72%, rgba(10, 14, 20, 0) 30%, rgba(10, 14, 20, 0.55)); animation: wo-fade 0.6s ease both; }
+@keyframes wo-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* the panel: one per beat, above the dock, at most ~40% of the screen */
+.wo-panel { position: absolute; left: var(--sl); right: var(--sr); bottom: var(--wo-bottom, 92px); max-height: 42vh; overflow-y: auto; overscroll-behavior: contain;
+  padding: 12px 14px 14px; border-radius: 20px; }
+.wo-panel.in { animation: wo-in 0.35s var(--spring); }
+@keyframes wo-in { from { opacity: 0; transform: translateY(16px) scale(0.97); } to { opacity: 1; transform: none; } }
+.wo-head .eyebrow { margin-bottom: 1px; }
+.wo-head h2 { margin: 0; font-size: var(--fs-xl); line-height: 1.15; }
+.wo-note { margin: 6px 0 0; font-size: var(--fs-m); color: var(--ink); font-weight: 600; }
+.wo-caption { margin: 0; text-align: center; font: italic 500 var(--fs-l) Fraunces, Georgia, serif; color: var(--ink-strong); }
+
+/* the leaderboard ribbon across the top */
+.wo-board { position: absolute; top: calc(var(--st) + 4px); left: var(--sl); right: var(--sr); display: flex; gap: 6px; align-items: center;
+  overflow-x: auto; scrollbar-width: none; padding: 6px 8px; border-radius: 16px; background: rgba(47, 58, 53, 0.86); color: #f7f4ed; box-shadow: var(--shadow); }
+.wo-board::-webkit-scrollbar { display: none; }
+.wo-board-t { font-size: var(--fs-xs); font-weight: 900; letter-spacing: 0.1em; text-transform: uppercase; color: #e9b27a; padding: 0 4px; flex: none; }
+.wo-slot { flex: none; display: inline-flex; align-items: center; gap: 5px; min-height: 30px; padding: 0 9px; border-radius: 999px; background: rgba(255, 255, 255, 0.1);
+  font-weight: 800; font-size: var(--fs-s); white-space: nowrap; }
+.wo-slot b { color: #e9b27a; }
+.wo-slot i { font-style: normal; font-variant-numeric: tabular-nums; opacity: 0.85; }
+.wo-slot.you { background: var(--pumpkin); color: #fff; }
+.wo-slot.you b { color: #fff3c4; }
+.wo-slot.out { opacity: 0.5; text-decoration: line-through; }
+.wo-slot.new { animation: pop 0.5s var(--spring); }
+
+/* speech bubbles for the Weighmaster's in-sequence lines */
+.wo-say { display: flex; gap: 10px; align-items: center; margin-top: 8px; padding: 8px 10px; border-radius: 14px; background: #fff; box-shadow: var(--shadow-sm); animation: pop 0.4s var(--spring); }
+.wo-say .portrait { width: 48px; height: 48px; flex: none; }
+.wo-say b { display: block; font: 650 var(--fs-m) Fraunces, Georgia, serif; color: var(--ink-strong); }
+.wo-say span { font-size: var(--fs-m); line-height: 1.35; }
+
+/* stamps: PASS, EXHIBITION ONLY, +6.2% HEAVY, PERSONAL BEST, COVE RECORD */
+.wo-stamp { display: inline-block; margin: 2px 6px 0 2px; padding: 4px 12px; border: 4px solid currentColor; border-radius: 10px; transform: rotate(-4deg);
+  font: 900 var(--fs-l) 'Nunito Sans', sans-serif; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; animation: wo-slam 0.42s cubic-bezier(0.2, 1.6, 0.4, 1) both; }
+.wo-stamps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 10px; padding: 2px 4px; }
+.wo-stamps:empty { display: none; }
+.wo-sofar { font-weight: 800; color: var(--ink-strong); }
+.wo-stamp.good { color: var(--good); } .wo-stamp.bad { color: var(--bad); } .wo-stamp.warn { color: var(--warn); }
+.wo-stamp.gold { color: #b8860b; background: #fff4cf; }
+@keyframes wo-slam { 0% { opacity: 0; transform: scale(2.4) rotate(-12deg); } 60% { opacity: 1; transform: scale(0.94) rotate(-3deg); } 100% { transform: scale(1) rotate(-4deg); } }
+.wo-banners:empty { display: none; }
+
+/* floating words over the diorama: HEAVE!, NINE HUN-DRED!, CHART!, OOOOOH! */
+.wo-layer { position: absolute; inset: 0; overflow: hidden; }
+.wo-pop { position: absolute; transform: translate(-50%, -50%); white-space: nowrap; pointer-events: none; animation: wo-pop 1.4s var(--ease) both;
+  font: 900 20px 'Nunito Sans', sans-serif; color: #fffaf0; text-shadow: 0 2px 0 rgba(40, 30, 20, 0.55), 0 0 10px rgba(40, 30, 20, 0.4); }
+.wo-pop.big { font-size: 34px; color: #fff3c4; }
+.wo-pop.good { color: #d9f5c8; } .wo-pop.bad { color: #ffd2c4; }
+.wo-pop.chant { font-size: 17px; color: #ffe2b8; letter-spacing: 0.04em; }
+.wo-pop.tiny { font: italic 600 15px Fraunces, Georgia, serif; }
+/* a spectator's speech bubble: a small white bubble with a tail, up long enough to read */
+.wo-pop.say { font: 700 15px 'Nunito Sans', sans-serif; color: var(--ink-strong); text-shadow: none; background: #fff; padding: 7px 12px;
+  border-radius: 14px; box-shadow: var(--shadow-sm); animation: wo-say 6.5s var(--ease) both; }
+.wo-pop.say::after { content: ''; position: absolute; left: 22px; bottom: -7px; border: 7px solid transparent; border-bottom: 0; border-top-color: #fff; }
+@keyframes wo-say { 0% { opacity: 0; transform: translate(-50%, -40%) scale(0.7); } 8% { opacity: 1; transform: translate(-50%, -60%) scale(1.04); }
+  12% { transform: translate(-50%, -60%) scale(1); } 88% { opacity: 1; transform: translate(-50%, -60%); } 100% { opacity: 0; transform: translate(-50%, -66%); } }
+@keyframes wo-pop { 0% { opacity: 0; transform: translate(-50%, -30%) scale(0.6); } 15% { opacity: 1; transform: translate(-50%, -60%) scale(1.08); }
+  70% { opacity: 1; transform: translate(-50%, -110%) scale(1); } 100% { opacity: 0; transform: translate(-50%, -150%) scale(0.96); } }
+
+/* the line-up at dawn */
+.wo-lineup { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; margin-top: 8px; }
+.wo-line { display: flex; gap: 8px; align-items: center; min-height: 38px; padding: 3px 8px; border-radius: 12px; background: #fff; box-shadow: var(--shadow-sm); }
+.wo-line > b { width: 22px; text-align: center; color: var(--muted); }
+.wo-line .grow { flex: 1; min-width: 0; }
+.wo-line .t { font-weight: 800; color: var(--ink-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wo-line .d { font-size: var(--fs-xs); color: var(--muted); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wo-line .est { flex: none; font: 800 var(--fs-xs) ui-monospace, Menlo, monospace; color: var(--pumpkin-dark); white-space: nowrap; }
+.wo-line.you { background: var(--pumpkin-soft); }
+
+/* Night Watch */
+.wo-timer { height: 8px; border-radius: 4px; background: var(--chip); margin-top: 8px; overflow: hidden; }
+.wo-timer i { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, #6f8b7b, #e9b27a); }
+.wo-score { display: block; margin-top: 6px; font-weight: 800; color: var(--ink-strong); }
+.wo-defs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.wo-defs span { font-size: var(--fs-xs); font-weight: 700; color: var(--muted); background: var(--chip); padding: 3px 8px; border-radius: 8px; }
+.wo-eye { position: absolute; left: 0; top: 0; width: 64px; height: 64px; margin: -32px 0 0 -32px; border: 0; border-radius: 50%; cursor: pointer;
+  background: radial-gradient(circle, rgba(216, 255, 138, 0.25), rgba(216, 255, 138, 0) 70%); display: flex; align-items: center; justify-content: center; gap: 8px;
+  animation: wo-eye 0.25s ease-out both; touch-action: manipulation; }
+.wo-eye i { width: 9px; height: 9px; border-radius: 50%; background: #e9ffb0; box-shadow: 0 0 10px 3px rgba(216, 255, 138, 0.8); }
+@keyframes wo-eye { from { transform: scale(0.3); opacity: 0; } to { opacity: 1; } }
+
+/* the HEAVE ring around her and the big button */
+.wo-ring { position: absolute; left: 0; top: 0; width: 0; height: 0; --k: 0; }
+.wo-ring i { position: absolute; left: 0; top: 0; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%; }
+.wo-ring .target { border: 4px dashed rgba(255, 250, 240, 0.85); box-shadow: 0 0 0 3px rgba(40, 30, 20, 0.25); }
+.wo-ring .closer { border: 6px solid #e9b27a; transform: scale(calc(2.6 - 1.6 * var(--k))); opacity: calc(1.4 - var(--k) * 0.5);
+  box-shadow: 0 0 12px rgba(233, 178, 122, 0.8); }
+.wo-ring.hit .target { animation: wo-hit 0.35s ease-out; }
+@keyframes wo-hit { 0% { transform: scale(1); } 40% { transform: scale(1.15); border-color: #fff3c4; } 100% { transform: scale(1); } }
+.wo-heave { width: 100%; min-height: 76px; margin-top: 10px; font-size: var(--fs-xl); letter-spacing: 0.06em; touch-action: manipulation; }
+.wo-heave .ico { width: 30px; height: 30px; }
+.wo-marks { display: flex; gap: 8px; margin-top: 8px; }
+.wo-marks i { width: 28px; height: 10px; border-radius: 5px; background: var(--chip); }
+.wo-marks i.perfect { background: var(--good); } .wo-marks i.good { background: #9cbf86; } .wo-marks i.wobble { background: var(--bad); }
+
+/* Prettiest: three judges flip their cards, then the ribbons */
+.wo-judges { display: flex; gap: 8px; margin-top: 8px; }
+.wo-judge { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.wo-judge .portrait { width: 44px; height: 44px; }
+.wo-card { width: 64px; height: 52px; border-radius: 10px; background: #2f3a35; color: transparent; display: grid; place-items: center;
+  transform: rotateY(90deg); transition: transform 0.35s var(--spring), background 0.2s; }
+.wo-card b { font: 900 var(--fs-xl) 'Nunito Sans', sans-serif; }
+.wo-judge.flip .wo-card { transform: none; background: #fff; color: var(--ink-strong); box-shadow: var(--shadow-sm); }
+.wo-judge .q { min-height: 2.4em; font-size: var(--fs-xs); font-weight: 700; color: var(--muted); text-align: center; line-height: 1.2; opacity: 0; transition: opacity 0.3s 0.2s; }
+.wo-judge.flip .q { opacity: 1; }
+.wo-ribbons { display: grid; gap: 4px; margin-top: 8px; }
+.wo-ribbon { display: flex; gap: 10px; align-items: center; min-height: 36px; padding: 0 10px; border-radius: 12px; background: #fff; box-shadow: var(--shadow-sm); animation: pop 0.45s var(--spring); }
+.wo-ribbon b { width: 34px; font-weight: 900; }
+.wo-ribbon span { flex: 1; min-width: 0; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wo-ribbon i { font-style: normal; font-weight: 900; font-variant-numeric: tabular-nums; }
+.wo-ribbon.p1 { background: #f6e6b8; } .wo-ribbon.p1 b { color: #7a5410; }
+.wo-ribbon.p2 b { color: #6f7f86; } .wo-ribbon.p3 b { color: #9b6a3c; }
+.wo-ribbon.you { outline: 3px solid var(--pumpkin); }
+
+/* a weigh-in: the placard and the big readout */
+.wo-weigh { display: flex; gap: 10px; align-items: stretch; margin-top: 8px; flex-wrap: wrap; }
+.wo-placard { flex: 1 1 150px; min-width: 0; padding: 8px 10px; border-radius: 12px; background: #f4efe4; border: 2px solid #3f4c43; display: flex; flex-direction: column; gap: 1px; }
+.wo-placard b { font: 650 var(--fs-l) Fraunces, Georgia, serif; color: var(--ink-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wo-placard span { font-size: var(--fs-xs); font-weight: 700; color: var(--muted); }
+.wo-placard i, .wo-chart { font: 800 var(--fs-s) ui-monospace, Menlo, monospace; font-style: normal; color: var(--pumpkin-dark); }
+.wo-chart.hit { color: var(--good); animation: pop 0.4s var(--spring); }
+.wo-chart.miss { color: var(--warn); }
+.wo-readout { flex: 1 1 150px; display: flex; align-items: baseline; justify-content: center; gap: 6px; padding: 8px 12px; border-radius: 12px; background: #1d2420; color: #ffb347;
+  box-shadow: inset 0 0 0 2px #3a3f43; }
+.wo-digits { font: 800 34px ui-monospace, Menlo, monospace; font-variant-numeric: tabular-nums; text-shadow: 0 0 12px rgba(255, 179, 71, 0.45); }
+.wo-digits.big { font-size: 46px; }
+.wo-readout small { font: 800 14px ui-monospace, Menlo, monospace; color: #9fb3a8; }
+.wo-weigh.mine .wo-placard { background: var(--pumpkin-soft); border-color: var(--pumpkin-dark); }
+.wo-skip { margin-top: 10px; min-height: 44px; border: 0; cursor: pointer; }
+.wo-after:empty { display: none; }
+
+/* results */
+.wo-big { margin-top: 6px; }
+.wo-big b { display: block; font: 650 var(--fs-xxl) Fraunces, Georgia, serif; color: var(--ink-strong); }
+.wo-big span { font-weight: 700; color: var(--muted); font-size: var(--fs-s); }
+.wo-prizes { margin-top: 8px; }
+.wo-prize { animation: pop 0.35s var(--spring); }
+.wo-seeds { display: flex; gap: 8px; align-items: center; margin: 10px 0 0; padding: 8px 10px; border-radius: 12px; background: var(--sage-soft); font-weight: 700; font-size: var(--fs-s); }
+
+@media (min-width: 900px) {
+  .wo-panel { left: auto; right: var(--sr); width: 420px; bottom: var(--wo-bottom, 92px); max-height: 70vh; }
+  .wo-board { left: 50%; right: auto; transform: translateX(-50%); max-width: 760px; }
+}
