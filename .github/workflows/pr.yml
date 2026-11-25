@@ -16,10 +16,6 @@ jobs:
       - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
       - run: bun install --frozen-lockfile
       - run: bun run check
-      - run: bun run --cwd games/battledrones build
-      - run: bun run --cwd games/battledrones gate
-      - run: bun run --cwd games/chroma build
-      - run: bun run --cwd games/chroma gate
-      - run: bun run --cwd games/tree-appreciator build
-      - run: bun run --cwd games/emberwick build
-      - run: bun run --cwd games/pumpkin-farmer build
+      - run: bun run gate
+      # Builds every target and checks its Worker config without uploading.
+      - run: bun run deploy --dry-run

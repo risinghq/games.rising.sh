@@ -9,8 +9,6 @@
     "build:pages": "node tools/build-pages.mjs",
     "preview": "vite preview",
     "check": "tsc --noEmit && vitest run",
-    "stage": "rm -rf .deploy && mkdir .deploy && cp -r dist .deploy/battledrones",
-    "deploy": "bun run build && bun run stage && wrangler deploy",
     "test": "vitest run && node --test tools/pages-archive.test.mjs",
     "test:watch": "vitest",
     "smoke": "node tools/smoke.mjs",

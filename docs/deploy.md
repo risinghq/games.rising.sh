@@ -1,37 +1,32 @@
 # Deploy
 
-Each game is a static Cloudflare Worker with its own route on `games.rising.sh`.
+Each game is a static Cloudflare Worker named `games-<name>`, served on
+`games.rising.sh/<name>` and `games.rising.sh/<name>/*`. The front page,
+[apps/index](../apps/index/), is the Worker `games-index` on
+`games.rising.sh/*`. Cloudflare picks the most specific route, so each game
+keeps its own paths and no path falls through to the zone's empty origin.
 
-| Game             | Workflow                                                                        | Route                               |
-| ---------------- | ------------------------------------------------------------------------------- | ----------------------------------- |
-| Battle Drones    | [deploy-battledrones.yml](../.github/workflows/deploy-battledrones.yml)         | `games.rising.sh/battledrones/`     |
-| Chroma           | [deploy-chroma.yml](../.github/workflows/deploy-chroma.yml)                     | `games.rising.sh/chroma/`           |
-| Tree Appreciator | [deploy-tree-appreciator.yml](../.github/workflows/deploy-tree-appreciator.yml) | `games.rising.sh/tree-appreciator/` |
-| Emberwick        | [deploy-emberwick.yml](../.github/workflows/deploy-emberwick.yml)               | `games.rising.sh/emberwick/`        |
-| Pumpkin Farmer   | [deploy-pumpkin-farmer.yml](../.github/workflows/deploy-pumpkin-farmer.yml)     | `games.rising.sh/pumpkin-farmer/`   |
-
-A workflow runs on a push to `master` that changes the game's folder, a
-`packages/` folder it imports, the lockfile, the tool versions or the workflow
-itself. It also runs by hand from the Actions tab. It installs with
-`bun install --frozen-lockfile` and runs the game's `deploy` script:
+A deploy target is a folder name under `games/`, or `index` for the front page.
+[tools/deploy.ts](../tools/deploy.ts) deploys one:
 
 ```sh
-bun run --cwd games/<game> deploy
+bun run deploy chroma           # build, stage and deploy one target
+bun run deploy --dry-run        # build every target and check its Worker config
 ```
 
-The script builds the game, copies `dist/` to `.deploy/<game>/` and runs
-`wrangler deploy`. The game's `wrangler.jsonc` serves `.deploy/` as static
-assets on the routes `games.rising.sh/<game>` and `games.rising.sh/<game>/*`.
+It runs the target's `build` script, copies `dist/` to
+`.deploy/<target>/assets/<target>/` (`assets/` for the front page), writes the
+Worker config to `.deploy/<target>/wrangler.json` and runs `wrangler deploy`.
+Wrangler warns that a game's routes serve assets on a path. It is expected.
 
-## Front page
-
-The front page is its own Worker, [apps/index](../apps/index/). Its route is
-`games.rising.sh/`, which matches `/` only, so each game keeps its own paths.
-Wrangler warns that the route serves assets on a path. It is expected: `/`
-serves `index.html`. A request with a query string, such as `/?x=1`, does not
-match the route. [deploy-index.yml](../.github/workflows/deploy-index.yml) also
-runs when a `games/*/game.json` changes, because the page is built from those
-files. Deploy it like a game: `bun run --cwd apps/index deploy`.
+[deploy.yml](../.github/workflows/deploy.yml) runs on every push to `master`.
+`bun tools/deploy.ts --changed <before>` lists the targets the push changed: a
+game's folder deploys that game, a `game.json` or `apps/index/` change also
+deploys the front page, and a change to `packages/`, the root `package.json`,
+the lockfile, `mise.toml`, the deploy tool or the workflow deploys everything.
+Each target deploys in its own matrix job, so one failed game does not block the
+others. A run by hand from the Actions tab takes a space-separated list of
+targets, or deploys all of them when the list is empty.
 
 ## One-time setup
 
@@ -59,33 +54,21 @@ files. Deploy it like a game: `bun run --cwd apps/index deploy`.
    | `CLOUDFLARE_API_TOKEN`  | the token from step 2  |
    | `CLOUDFLARE_ACCOUNT_ID` | the account id, step 3 |
 
-6. First deploy. Open Actions, choose `deploy <game>`, and press Run workflow.
-   Then open `https://games.rising.sh/<game>/`. Repeat for each game. Run
-   `deploy index` last and open `https://games.rising.sh/`.
+6. First deploy. Open Actions, choose `deploy`, and press Run workflow with an
+   empty target list. Then open `https://games.rising.sh/`.
 
 ## Deploy from your machine
-
-Build and deploy without the workflow:
 
 ```sh
 export CLOUDFLARE_API_TOKEN=<token>
 export CLOUDFLARE_ACCOUNT_ID=<account id>
 bun install
-bun run --cwd games/<game> deploy
-```
-
-To check the configuration without uploading anything:
-
-```sh
-bun run --cwd games/<game> build
-bun run --cwd games/<game> stage
-cd games/<game> && bunx wrangler deploy --dry-run
+bun run deploy <target>
 ```
 
 ## Add a game
 
-Give the game its own `wrangler.jsonc` with a unique `name` and its own route
-`games.rising.sh/<game>/*`, its own `stage` and `deploy` scripts, and its own
-workflow whose `paths` list the game's folder and each `packages/` folder it
-imports. Add a `game.json` so the front page lists it. The secrets and the DNS
-record are shared.
+Add a folder under `games/` with a `package.json` whose `build` script writes
+`dist/`, and a `game.json` so the front page lists it. A `check` script runs in
+`bun run check` and a `gate` script in `bun run gate`. The deploy needs nothing
+else: the next push to `master` that touches the folder deploys it.

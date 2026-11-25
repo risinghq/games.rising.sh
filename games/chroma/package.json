@@ -6,8 +6,6 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "stage": "rm -rf .deploy && mkdir .deploy && cp -r dist .deploy/chroma",
-    "deploy": "bun run build && bun run stage && wrangler deploy",
     "check": "tsc --noEmit && vitest run",
     "batch": "vite-node tools/batch.ts",
     "gate": "vite-node tools/gate.ts"

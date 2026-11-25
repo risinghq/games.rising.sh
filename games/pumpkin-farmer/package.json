@@ -5,9 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "rm -rf dist && mkdir dist && cp -r index.html src dev dist/",
-    "stage": "rm -rf .deploy && mkdir .deploy && cp -r dist .deploy/pumpkin-farmer",
-    "deploy": "bun run build && bun run stage && wrangler deploy"
+    "build": "rm -rf dist && mkdir dist && cp -r index.html src dev dist/"
   },
   "devDependencies": {
     "vite": "^6.0.0"
