@@ -13,6 +13,11 @@ The second is [Chroma](games/chroma/), a Phaser shooting gallery where each duck
 takes the paint of its own colour and the wrong paint mixes into a new one. Its
 [rules](games/chroma/RULES.md) fit one page.
 
+The third is [Tree Appreciator](games/tree-appreciator/), Simon Willison's calm
+3D spot-the-difference game with a herbarium of finished trees. It is imported
+unchanged from [simonw/tools](https://github.com/simonw/tools) at a pinned
+commit, recorded in [NOTICE](NOTICE).
+
 ## Run a game
 
 Install [mise](https://mise.jdx.dev), then:
@@ -58,7 +63,8 @@ bun run --cwd apps/index build   # writes apps/index/dist/index.html
 - `apps/index/` holds the front page.
 - `packages/` is for code shared by games. `packages/sim-kit` holds the seeded
   random numbers, the engine-independent maths, the state hash and the batch
-  playtest helpers. A game never calls `Math.random`.
+  playtest helpers. A game with a seeded simulation never calls `Math.random`.
+  An imported game keeps its upstream code.
 
 Play seeded Chroma runs with each scripted shooter and print their pacing:
 
@@ -74,4 +80,6 @@ Apache 2.0, see [LICENSE](LICENSE). Battle Drones is by Simon Willison, also
 under Apache 2.0, see [games/battledrones/LICENSE](games/battledrones/LICENSE).
 Its images were generated with an image model, except the HUD portraits, which
 are renders of its 3D models, as
-[games/battledrones/ART.md](games/battledrones/ART.md) describes.
+[games/battledrones/ART.md](games/battledrones/ART.md) describes. Tree
+Appreciator is by Simon Willison under Apache 2.0, see
+[games/tree-appreciator/LICENSE](games/tree-appreciator/LICENSE).
