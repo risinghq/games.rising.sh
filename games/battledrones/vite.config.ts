@@ -45,7 +45,7 @@ function showcaseBattles(): Plugin {
 }
 
 export default defineConfig({
-  // Local builds are portable; Pages supplies an absolute base for each version.
+  // Relative, so the build serves from any path, such as /battledrones/.
   base: "./",
   server: { host: true },
   define: {
@@ -56,7 +56,7 @@ export default defineConfig({
     __DUEL_HASH__: JSON.stringify(duelHash(fileURLToPath(new URL(".", import.meta.url)))),
     // a four-player online battle seats only pages running the same sim and battle code (FFA.md)
     __FFA_HASH__: JSON.stringify(ffaHash(fileURLToPath(new URL(".", import.meta.url)))),
-    // the version tag this build is (v11), from tools/build-pages.mjs; null for main and local builds.
+    // the version tag this build is (v11), from the VERSION_TAG env; null for untagged builds.
     // A record pinned to it (BattleRecord.version) is known to replay exactly, with nothing to check
     __VERSION_TAG__: JSON.stringify(process.env.VERSION_TAG || null)
   },

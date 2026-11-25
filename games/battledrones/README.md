@@ -27,6 +27,13 @@ the two pages by room code and stores nothing
 ([`relay/README.md`](relay/README.md)). If a phone drops its connection, it
 reconnects to its seat and the match carries on.
 
+On games.rising.sh the game uses upstream's relay,
+`wss://battledrones-relay.fly.dev` (`src/net/relay-socket.ts`), which this
+repository does not deploy. The relay in `relay/` accepts only Simon
+Willison's origins; the deployed one accepted games.rising.sh on 2026-11-25. If
+it stops, online play needs our own relay and an origin that allows
+games.rising.sh.
+
 ## Battle up to three friends online
 
 **Compass Rose** is a four-player map: four bases, one in each corner of a
@@ -263,7 +270,6 @@ npm run build          # typecheck + production build into dist/
 npm run gate           # pacing gate: 56 seeded AI-vs-AI matches, exits 1 on a draw-rate or side-skew breach (DESIGN.md "The pacing gate")
 npm run smoke          # headless Playwright test of the real touch flow (against dist/)
 npm run smoke -- --side=red   # the same flow playing red against a blue AI (SOUND-DUEL.md)
-npm run build:pages    # build current game + all version tags into _site/
 npm run balance duels  # cost-equal unit duel matrix
 npm run balance matches [map]   # AI-vs-AI round robin (openers + objectives; --classic / --no-objectives),
                        # with the Goliath numbers (--no-goliath bans it, for an A/B run)
@@ -316,13 +322,11 @@ npm run arena watch battles/<file>.json                    # the 3D viewer on th
 npm run arena stats -- battles/*.json --detail             # results by model, side, map, opener
 ```
 
-GitHub Pages is published by `.github/workflows/pages.yml` on pushes to `main`, newly published releases (including prereleases), and manual runs. It builds the latest `main` at <https://simonw.github.io/battledrones/> and every `v`-prefixed version tag (`v1`, `v2`, …, or semver tags such as `v9.1.0`) at its own path, such as <https://simonw.github.io/battledrones/v1/>. Every deployment contains all versions, so updating the current game preserves the archive. Tags should remain fixed once published.
-
-Each historical build includes a downloadable ZIP, such as <https://simonw.github.io/battledrones/v3/v3.zip>. Later deployments first try to download and reuse that ZIP, checking its integrity and recorded tag, commit, URL path, and archive format. Missing, invalid, or outdated archives fall back to a build from the tag's own source and lockfile, then publish a new ZIP. The current game always builds from source. Set `PAGES_CACHE_URL=` to force all historical builds, or set it to another site root to test cache reuse locally.
-
-Pull requests build the complete site without deploying. The Pages workflow only builds and publishes; the separate Tests workflow runs the unit tests. To build the site locally, run `git fetch --tags`, `npm ci`, and `npm run build:pages`. Generated `dist/` and `_site/` output is ignored; there is no need to commit a built `docs/` folder.
-
-The repository's **Settings → Pages → Build and deployment → Source** must be **GitHub Actions**. Release events dispatch the workflow on `main`, so the `github-pages` environment can remain restricted to that branch. To republish after tagging a historical commit that predates the workflow, run **Publish Pages** manually on `main`.
+The game deploys to <https://games.rising.sh/battledrones/> with the rest of
+the site ([docs/deploy.md](../../docs/deploy.md)). Upstream's per-version GitHub
+Pages archive (`/v1/`, `/v2/`, …) is not built here, so `BUILD_TAG` is always
+null and the link a record pinned to a version tag offers, `/battledrones/vN/`,
+does not exist here.
 
 Art pipeline (Python 3 + Pillow/numpy/scipy, `OPENAI_API_KEY` for
 generation) — see **ART.md**:
