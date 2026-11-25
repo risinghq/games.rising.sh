@@ -54,14 +54,29 @@
     "games/emberwick": {
       "name": "emberwick",
       "version": "0.1.0",
+      "dependencies": {
+        "three": "0.170.0",
+      },
+      "devDependencies": {
+        "vite": "^6.0.0",
+      },
     },
     "games/pumpkin-farmer": {
       "name": "pumpkin-farmer",
       "version": "0.1.0",
+      "dependencies": {
+        "three": "0.170.0",
+      },
+      "devDependencies": {
+        "vite": "^6.0.0",
+      },
     },
     "games/tree-appreciator": {
       "name": "tree-appreciator",
       "version": "0.1.0",
+      "devDependencies": {
+        "vite": "^6.0.0",
+      },
     },
     "packages/sim-kit": {
       "name": "@rising/sim-kit",
@@ -1105,9 +1120,13 @@
 
     "babel-plugin-polyfill-corejs2/semver": ["semver@6.3.1", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA=="],
 
+    "emberwick/three": ["three@0.170.0", "", {}, "sha512-FQK+LEpYc0fBD+J8g6oSEyyNzjp+Q7Ks1C568WWaoMRLW+TkNNWmenWeGgJjV105Gd+p/2ql1ZcjYvNiPZBhuQ=="],
+
     "filelist/minimatch": ["minimatch@5.1.9", "", { "dependencies": { "brace-expansion": "^2.0.1" } }, "sha512-7o1wEA2RyMP7Iu7GNba9vc0RWWGACJOCZBJX2GJWip0ikV+wcOsgVuY9uE8CPiyQhkGFSlhuSkZPavN7u1c2Fw=="],
 
     "path-scurry/lru-cache": ["lru-cache@11.5.3", "", {}, "sha512-U4N8FgzmWxc8k1VH8Kr6lQg18U7Fjvby6wXHVRX/ZZ7IwWbRMgrRbP0Wrb5q5NVinryp4SQampHKdvtecItxUg=="],
+
+    "pumpkin-farmer/three": ["three@0.170.0", "", {}, "sha512-FQK+LEpYc0fBD+J8g6oSEyyNzjp+Q7Ks1C568WWaoMRLW+TkNNWmenWeGgJjV105Gd+p/2ql1ZcjYvNiPZBhuQ=="],
 
     "source-map-support/source-map": ["source-map@0.6.1", "", {}, "sha512-UjgapumWlbMhkBgzT7Ykc5YXUT46F0iKu8SGXq0bcwP5dz/h0Plj6enJqjz1Zbq2l5WaqYnrVbwWOWMyF3F47g=="],
 

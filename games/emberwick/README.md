@@ -10,18 +10,18 @@ The game is imported from the v11 build Simon Willison published at
 Upstream carries no licence. See [NOTICE](../../NOTICE).
 
 Upstream ships one page whose module script is the files in `src/`, joined in
-name order. `shell.html` is that page with the script replaced by `__SOURCE__`,
-and `build.ts` joins `src/` back in. On import, `dist/index.html` matched the
-published v11 page byte for byte (sha256 `86d2fefc…bbef`). Then
-`<meta charset="utf-8">` was added to the shell: GitHub Pages names the charset
+name order. They share one scope, so they cannot be imported one by one.
+`index.html` is that page with the script replaced by `<script src="/game.js">`.
+The plugin in `vite.config.ts` serves `/game.js` as `src/` joined the way
+upstream joins it, with `// ---- NAME ----` headers. It also points upstream's
+`'__THREE__'` placeholder at the `three` package, pinned to upstream's 0.170.0.
+The page loads its fonts from Google Fonts.
+
+`<meta charset="utf-8">` was added to the page: GitHub Pages names the charset
 in its response header, Cloudflare does not, and without it the browser garbles
-the page's dashes and ellipses. The page loads three.js 0.170.0 from jsDelivr
-and its fonts from Google Fonts.
+the page's dashes and ellipses.
 
 ```sh
-bun run serve emberwick               # build, then serve localhost:8000/emberwick/
-bun run --cwd games/emberwick build   # writes dist/index.html
+bun run --cwd games/emberwick dev     # Vite dev server, reloads on edit
+bun run serve emberwick               # the built game at localhost:8000/emberwick/
 ```
-
-Edit a file in `src/`, then build. The `// ---- NAME ----` headers in the built
-page name the source file of each part.

@@ -11,6 +11,6 @@ at commit `dafb677`, under Apache 2.0 ([LICENSE](LICENSE)). It loads three.js
 r128 from cdnjs and its fonts from Google Fonts.
 
 ```sh
-bun run serve tree-appreciator               # serve localhost:8000/tree-appreciator/
-bun run --cwd games/tree-appreciator build   # writes dist/index.html
+bun run --cwd games/tree-appreciator dev     # Vite dev server, reloads on edit
+bun run serve tree-appreciator               # the built game at localhost:8000/tree-appreciator/
 ```
