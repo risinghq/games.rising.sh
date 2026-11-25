@@ -1,0 +1,15 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "games-tree-appreciator",
+  "compatibility_date": "2026-10-01",
+  // `bun run stage` copies dist/ to .deploy/tree-appreciator/, so the page is
+  // served under the /tree-appreciator/ prefix the route matches.
+  "assets": { "directory": "./.deploy" },
+  "routes": [
+    { "pattern": "games.rising.sh/tree-appreciator", "zone_name": "rising.sh" },
+    {
+      "pattern": "games.rising.sh/tree-appreciator/*",
+      "zone_name": "rising.sh",
+    },
+  ],
+}
