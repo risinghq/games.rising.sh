@@ -25,6 +25,10 @@ The sixth is [Border](games/border/), where two houses take turns smuggling
 crates through three passes while the other guesses which one. Its
 [rules](games/border/RULES.md) fit one page.
 
+The seventh is [Chroma](games/chroma/), a Phaser shooting gallery where each
+duck takes the paint of its own colour and the wrong paint mixes into a new one.
+Its [rules](games/chroma/RULES.md) fit one page.
+
 ## Run a game
 
 Install [mise](https://mise.jdx.dev), then:
