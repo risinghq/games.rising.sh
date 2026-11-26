@@ -10,7 +10,7 @@ export const fogU = {
   uFogR0: { value: 24 }, uFogR1: { value: 38 }, uFogFP: { value: 0 },
 };
 
-export function fogPatch(shader) {
+export function fogPatch(shader: THREE.WebGLProgramParametersWithUniforms) {
   Object.assign(shader.uniforms, fogU);
   shader.vertexShader = shader.vertexShader
     .replace('#include <fog_pars_vertex>', '#ifdef USE_FOG\nvarying float vFogDepth;\nvarying vec3 vFogWorld;\n#endif')
@@ -49,11 +49,11 @@ export function fogPatch(shader) {
 }
 
 // The prototype's setFog(): one number moves the swallowing radius, the mist and first-person depth fog.
-export function applyFog(scene, a) {
+export function applyFog(scene: THREE.Scene, a: number) {
   const amt = THREE.MathUtils.clamp(a, 0, 1), lerp = THREE.MathUtils.lerp;
   fogU.uFogAmt.value = amt;
   fogU.uFogR0.value = lerp(27, 7, amt);
   fogU.uFogR1.value = fogU.uFogR0.value + lerp(14, 20, amt);
-  if (scene.fog) { scene.fog.near = lerp(30, 1.5, amt); scene.fog.far = lerp(120, 26, amt); }
+  if (scene.fog instanceof THREE.Fog) { scene.fog.near = lerp(30, 1.5, amt); scene.fog.far = lerp(120, 26, amt); }
   return amt;
 }

@@ -27,14 +27,17 @@ import { bugsShown, seatBugs, FLEE, HID, DEAD } from '../sim/hunt.js';   // [E] 
 import { T } from '../sim/tuning.js';
 import { bugSpot, rowTargets, spanText } from '../sim/patch.js';
 import { brambleGrazed } from '../sim/mischief.js';
-
+import type { State, OutEvent } from '../sim/types.js';
+import type { Kit } from './types.js';
+import { PatchRow } from '../sim/state.js';
+import { PatchVolunteer } from '../sim/state.js';
 const N = ROWS.count, SLOTS = { large: T.patch.display.large, mini: T.patch.display.mini };
 const BRAM_W = -9.8, BRAM_E = 6.6;                       // [A] a bramble row's lumps span x -9.2 .. 5.8 (+ a little)
 const LEAF_X = 38, LEAVES = LEAF_X * 2, VINES = 16, BLOOMS = 8, BUGS = 14, ROT = 10, BRAM = 18, CANES = 16, BERRIES = 10;
 const PILE = 18, JARS = 12, SWARM = 28, VLEAVES = 9;
 const HUNT_SCALE = 1.4;                                   // [E] bugs in a hunt's close-up are drawn this much bigger
 const LEAF_COLS = [0x7d9a6a, 0x6b8a5c, 0x8fa877, 0x78935f, 0x9aae7c];
-const VT = T.varieties, yieldOf = (v) => VT[v]?.fruit ?? 80, dtmOf = (v) => VT[v]?.dtm ?? 90;
+const VT = T.varieties, yieldOf = (v: string) => VT[v]?.fruit ?? 80, dtmOf = (v: string|number) => VT[v]?.dtm ?? 90;
 const STATE = { green: 1, prime: 2, soft: 3 };
 // what the title screen shows: the prototype's full, ripe patch
 const DEMO_ROWS = ['classic', 'white', 'classic', 'blue', 'mini', 'cinderella', 'warty'].map((v) => {
@@ -43,10 +46,10 @@ const DEMO_ROWS = ['classic', 'white', 'classic', 'blue', 'mini', 'cinderella', 
 });
 
 const tmpC = new THREE.Color(), tmpC2 = new THREE.Color(), m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), p = new THREE.Vector3(), sc = new THREE.Vector3();
-const mixHex = (a, b, k) => tmpC.setHex(a).lerp(tmpC2.setHex(b), k);
+const mixHex = (a: number, b: number, k: number) => tmpC.setHex(a).lerp(tmpC2.setHex(b), k);
 
 // How many of each (variety, state) a row shows: the display rule per variety, split by state.
-function wantedSlots(w, cap) {
+function wantedSlots(w: { by: { [x: string]: any; }; v: string; }, cap: number) {
   const want = new Map();
   let used = 0;
   const order = Object.keys(w.by).sort((a, b) => (a === w.v ? -1 : b === w.v ? 1 : 0));
@@ -64,11 +67,11 @@ function wantedSlots(w, cap) {
 }
 // Move slots toward the wanted (variety, state) counts with as few visible changes as possible: ripening converts
 // in place (green -> prime -> soft), sales clear slots from the back of the order, new fruit fills from the front.
-function settle(slots, order, want) {
+function settle(slots: { [x: string]: { v: any; }; }|null, order: string|any[], want: Map<any,any>) {
   const have = new Map();
-  const key = (sl) => `${sl.v}|${sl.c}`;
+  const key = (sl: { v: any; c: any; }) => `${sl.v}|${sl.c}`;
   for (const sl of slots) if (sl.c) have.set(key(sl), (have.get(key(sl)) || 0) + 1);
-  const n = (k) => have.get(k) || 0, w = (k) => want.get(k) || 0;
+  const n = (k: string) => have.get(k) || 0, w = (k: string) => want.get(k) || 0;
   const vs = new Set([...want.keys(), ...have.keys()].map((k) => k.split('|')[0]));
   for (const v of vs) for (const [a, b] of [[1, 2], [2, 3]]) {
     let k = Math.min(n(`${v}|${a}`) - w(`${v}|${a}`), w(`${v}|${b}`) - n(`${v}|${b}`));
@@ -90,7 +93,7 @@ function settle(slots, order, want) {
   }
 }
 
-export default function createPatchView(K) {
+export default function createPatchView(K: Kit) {
   const { scene } = K;
   const root = new THREE.Group(); root.name = 'patch'; scene.add(root);
   const pumpMat = PM(0xffffff);
@@ -128,7 +131,7 @@ export default function createPatchView(K) {
       g.fillText(t, x + cw / 2, y + ch / 2 + 2);
     });
   });
-  const flagTex = (label) => {
+  const flagTex = (label: string) => {
     const i = Math.max(0, LABELS.indexOf(label)), t = atlas.clone();
     t.repeat.set(1 / ATLAS.cols, 1 / ATLAS.rows);
     t.offset.set((i % ATLAS.cols) / ATLAS.cols, 1 - (Math.floor(i / ATLAS.cols) + 1) / ATLAS.rows);
@@ -146,7 +149,7 @@ export default function createPatchView(K) {
   // fixed, seeded layout per row: slots for each size class, leaves, vines, blossoms, brambles, rot, bugs
   const L = Array.from({ length: N }, (_, r) => {
     const z = rowZ(r), R = rng(5000 + r * 37);
-    const slotsFor = (kind) => {
+    const slotsFor = (kind: string) => {
       const S = SLOTS[kind], step = 15.3 / S;
       const s = Array.from({ length: S }, (_, i) => ({ x: -9.1 + (i + 0.5) * step + R.rr(-0.22, 0.22) * step, z: z + R.rr(-0.35, 0.35), rx: R.rr(-0.08, 0.08), ry: R.rand() * PI * 2, rz: R.rr(-0.08, 0.08), u: R.rand(), c: R.rand(), sr: R.rr(-0.3, 0.3), sx: R.rr(-0.4, 0.4) }));
       const order = s.map((_, i) => i).sort(() => R.rand() - 0.5);
@@ -177,7 +180,7 @@ export default function createPatchView(K) {
   })();
 
   // normalise a sim row (tolerant of missing fields, so fixtures and the title diorama work too)
-  function view(row) {
+  function view(row: PatchRow|{ open: boolean; }|null) {
     const v = row?.variety && VARIETY[row.variety] ? row.variety : null;
     const planted = !!v && row.plantedDay != null;
     const prog = planted ? row.progress ?? 0 : 0;
@@ -190,8 +193,8 @@ export default function createPatchView(K) {
 
   // [A] Pamela's grazing (plan §3.3; rulings R5: the payoff shows at once): each goat-day clears a sixth of a bramble row's
   // lumps, canes and berries, from the east end (the path) inwards. grazed: lumps eaten (sim mischief.brambleGrazed).
-  const grazedCut = (grazed) => (grazed > 0 ? BRAM_E - (grazed / BRAM) * (BRAM_E - BRAM_W) : Infinity);
-  function drawRow(r, w, M_, bounce) {
+  const grazedCut = (grazed: number) => (grazed > 0 ? BRAM_E - (grazed / BRAM) * (BRAM_E - BRAM_W) : Infinity);
+  function drawRow(r: number, w: { open: any; v: any; planted: any; prog: any; by: any; rotten: any; health: any; bugs?: any; mildew: any; shiny?: boolean; done: any; late: any; plan: any; set?: any; furrow: any; flag: any; grazed?: any; }, M_: number, bounce: number) {
     const lay = L[r], S = st[r], z = lay.z;
     // ---- brambles (until the row is cleared) and rotten lumps (for a few days after fruit rots)
     const xCut = grazedCut(w.grazed);
@@ -282,9 +285,9 @@ export default function createPatchView(K) {
   // Pack every visible pumpkin into the front of its pool and draw only that many instances (hidden slots cost no
   // vertices; a full patch is ~140 pumpkins). The barn pile and the volunteer pumpkin share the pools.
   let pileSig = '', vSig = '';
-  function drawPumpkins(s) {
+  function drawPumpkins(s: State) {
     let np = 0, nw = 0, ns = 0;
-    const put = (wart, x, y, z, rx, ry, rz, sxz, sy, hex, stemOn = true, V) => {
+    const put = (wart: boolean, x: number, y: number, z: number, rx: number, ry: number, rz: number, sxz: number, sy: number, hex: number|THREE.Color|undefined, stemOn = true, V: never) => {
       const im = wart ? warts : pumps, k = wart ? nw++ : np++;
       e.set(rx, ry, rz);
       im.setMatrixAt(k, m4.compose(p.set(x, y, z), q.setFromEuler(e), sc.set(sxz, sy, sxz)));
@@ -326,8 +329,8 @@ export default function createPatchView(K) {
     pumps.count = np; warts.count = nw; stems.count = ns;
     for (const im of [pumps, warts, stems]) { im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; }
   }
-  const volunteerGrowth = (s, vv) => (vv.state === 'ripe' ? 1 : clamp((s.clock.day - vv.day) / Math.max(1, 183 - vv.day), 0, 1));
-  function drawVolunteer(s) {
+  const volunteerGrowth = (s: State, vv: PatchVolunteer) => (vv.state === 'ripe' ? 1 : clamp((s.clock.day - vv.day) / Math.max(1, 183 - vv.day), 0, 1));
+  function drawVolunteer(s: State) {
     const vv = s?.patch?.volunteer, sp = vv && VINE_SPOTS[vv.spot];
     const k = sp && vv.state !== 'harvested' ? volunteerGrowth(s, vv) : 0;
     for (let i = 0; i < VLEAVES; i++) {
@@ -346,17 +349,17 @@ export default function createPatchView(K) {
     }
   }
 
-  function paintSoil(r, w, M_) {
+  function paintSoil(r: number, w: { open: any; v?: any; planted?: boolean; prog?: any; by?: any; rotten?: any; health?: any; bugs?: any; mildew?: any; shiny?: boolean; done?: boolean; late?: boolean; plan?: any; set?: any; furrow?: boolean; flag?: null; }, M_: number) {
     const wet = clamp((M_ - 0.2) / 0.6, 0, 1), key = !w.open ? 'scrub' : 'soil' + Math.round(wet * 10);
     if (key === st[r].soil) return;
     st[r].soil = key;
     K.world.paintRow(r, w.open ? 'soil' : 'scrub', wet);
   }
 
-  const bloomPts = [];
+  const bloomPts: THREE.Vector3[]|THREE.Points<THREE.BufferGeometry<THREE.NormalBufferAttributes>,THREE.Material|THREE.Material[],THREE.Object3DEventMap>|null|undefined = [];
   let lastS = null;
   const lod = { far: false };
-  function sync(s, dt, t) {
+  function sync(s: State, dt: number, t: any) {
     // the field's pumpkins: their far-off twins while they are a few pixels across (instances keep their matrices)
     const far = lodFar(lod, K.cam?.pxPerUnit ?? Infinity);
     pumps.geometry = far ? PG_LO : PG; warts.geometry = far ? PG_WART_LO : PG_WART;
@@ -411,14 +414,14 @@ export default function createPatchView(K) {
     animate(s, dt, t);
   }
   // [B] a planned or young row's flag says the weekends it is for (its own projection: patch.rowTargets), until its fruit sets
-  function flagLabel(s, r, row, w) {
+  function flagLabel(s: State, r: number, row: PatchRow|undefined, w: { open?: boolean; v?: any; planted: any; prog: any; by?: any; rotten?: any; health?: any; bugs?: any; mildew?: any; shiny?: boolean; done?: boolean; late?: boolean; plan?: any; set?: any; furrow?: boolean; flag?: null; }) {
     if (!row?.open || !(row.plan || (w.planted && w.prog < T.patch.fruitSetAt))) return null;
     const key = `${s.clock.year}|${row.plan?.day}|${row.plan?.variety}|${row.plantedDay}|${Math.floor((row.progress || 0) / 10)}`;
     let c = targetCache.get(r);
     if (c?.key !== key) targetCache.set(r, (c = { key, label: spanText(rowTargets(s, r)) || null }));
     return c.label;
   }
-  function drawFlags(dt, t) {
+  function drawFlags(dt: number, t: number) {
     for (let r = 0; r < N; r++) {
       const F = flags[r], w = st[r].w, label = w?.open ? w.flag : null;
       if (!label) { F.sp.visible = false; continue; }
@@ -434,15 +437,15 @@ export default function createPatchView(K) {
   }
   // [B] Biscuit runs a newly sown row, end to end, and comes back to where he was (the cast lets him go after)
   const run = { t: -1, path: null, len: 0 };
-  function startRun(z) {
+  function startRun(z: number) {
     const dog = K.cast?.biscuit;
     if (!dog || run.t >= 0) return;
     const p0 = dog.root.position.clone();
     run.path = [p0, new THREE.Vector3(ROWS.x0 - 0.3, 0, z + 0.42), new THREE.Vector3(ROWS.x1 + 0.3, 0, z + 0.42), p0.clone()];
-    run.len = run.path.slice(1).reduce((a, x, i) => a + x.distanceTo(run.path[i]), 0);
+    run.len = run.path.slice(1).reduce((a: any, x: { distanceTo: (arg0: any) => any; }, i: string|number) => a + x.distanceTo(run.path[i]), 0);
     run.t = 0; K.cast.hold('biscuit', true);
   }
-  function stepRun(dt) {
+  function stepRun(dt: number) {
     if (run.t < 0) return;
     const dog = K.cast.biscuit, speed = 6.5;
     run.t += dt;
@@ -457,13 +460,13 @@ export default function createPatchView(K) {
   let perkPending = false;
 
   // every frame: bugs crawl in their cluster (they jump when squished), shinies twinkle, honey jars, the swarm buzzes
-  function animate(s, dt, t) {
+  function animate(s: State, dt: number, t: number) {
     let bi = 0;
     for (let r = 0; r < N; r++) {
       const S = st[r], lay = L[r];
       if (S.squishT > 0) S.squishT = Math.max(0, S.squishT - dt * 3);
       drawBugs(r, S, lay, t, bi); bi += BUGS;
-      const slot = S.shiny && S.slots ? S.slots.findIndex((sl) => sl.c === 2) : -1;
+      const slot = S.shiny && S.slots ? S.slots.findIndex((sl: { c: number; }) => sl.c === 2) : -1;
       if (slot >= 0) {
         const sl = L[r][S.kind].s[slot], tw = 0.55 + 0.45 * Math.sin(t * 4 + r * 1.7);
         glint.set(r, sl.x, 0.85 + 0.12 * Math.sin(t * 2), sl.z, 0.75 * tw + 0.35, 0.75 * tw + 0.35, 0.6 + 0.4 * tw, 0xfff3c4);
@@ -499,13 +502,13 @@ export default function createPatchView(K) {
   // open on the row (K.hunt, which render/hands.js keeps from the UI's 'hunt/start') they are where the hunt has them,
   // a little bigger so a thumb can see them: crawling or running for a leaf, under a leaf (a back end peeking out of its
   // rim), squished (flat for a moment; the splat is render/hands.js's). The hunt starts with its bugs where they crawled.
-  const crawlAt = (lay, b, t, k) => {
+  const crawlAt = (lay: { cluster: any; z: any; }, b: { a: number; sp: number; dx: any; r: number; dz: any; }, t: number, k: number) => {
     const a = b.a + t * b.sp * (1 + k * 4);
     return { a, x: lay.cluster + b.dx + Math.cos(a) * b.r, z: lay.z + b.dz + Math.sin(a * 1.3) * b.r };
   };
-  function drawBugs(r, S, lay, t, b0) {
+  function drawBugs(r: number|undefined, S: { sig: string; kind: null; slots: null; bounce: number; soil: string; bugs: number; shiny: boolean; w: null; squishT: number; }|undefined, lay: { z: number; large: { s: { x: number; z: number; rx: number; ry: number; rz: number; u: number; c: number; sr: number; sx: number; }[]; order: number[]; }; mini: { s: { x: number; z: number; rx: number; ry: number; rz: number; u: number; c: number; sr: number; sx: number; }[]; order: number[]; }; leaf: { k: number; side: number; x: number; zo: number; s: number; y: number; rx: number; ry: number; rz: number; c: any; mil: number; }[]; vine: { x0: number; z0: number; x1: number; z1: number; }[]; bloom: THREE.Vector3[]; bramble: { x: number; z: number; s: number; sy: number; ry: number; c: any; }[]; cane: { x: number; z: number; h: number; rx: number; rz: number; }[]; berry: { x: number; z: number; y: number; }[]; rot: { x: number; z: number; s: number; ry: number; c: any; }[]; cluster: number; bug: { dx: number; dz: number; a: number; sp: number; r: number; }[]; }|undefined, t: number, b0: number) {
     const hunt = K.hunt?.row === r ? K.hunt.H : null;
-    if (hunt && !hunt.seated) seatBugs(hunt, lay.bug.slice(0, hunt.n).map((b) => crawlAt(lay, b, t, 0)));
+    if (hunt && !hunt.seated) seatBugs(hunt, lay.bug.slice(0, hunt.n).map((b: any) => crawlAt(lay, b, t, 0)));
     for (let i = 0, bi = b0; i < BUGS; i++, bi++) {
       if (hunt) {
         const h = hunt.bugs[i], flat = h && h.st === DEAD ? clamp(1 - (hunt.time - h.at) / 0.35, 0, 1) : 1;
@@ -529,8 +532,8 @@ export default function createPatchView(K) {
     }
   }
 
-  const rowMid = (r) => ({ x: (ROWS.x0 + ROWS.x1) / 2, z: rowZ(r) });
-  function fx(ev) {
+  const rowMid = (r: number|null|undefined) => ({ x: (ROWS.x0 + ROWS.x1) / 2, z: rowZ(r) });
+  function fx(ev: OutEvent) {
     const F = K.fx;
     if ((ev.type === 'tap' || ev.type === 'squash') && ev.kind === 'row' && st[ev.id]) st[ev.id].bounce = 1;
     switch (ev.type) {

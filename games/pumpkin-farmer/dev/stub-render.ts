@@ -4,12 +4,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { ROWS, rowZ, PLACES, ZONES } from '../src/sim/layout.js';
+import type { State, OutEvent } from '../src/sim/types.js';
 
 const SPC = { possum: [0xd9d6d0, 0x2d2c30, 0xe9a3a7], skunk: [0x2a2a30, 0xf3f0e8, 0x5a4148], raccoon: [0x8f8b86, 0x2f2b29, 0x2f2b29], beaver: [0x8a6248, 0x5d4030, 0xf1ede4],
   coyote: [0xc79a62, 0x8a6a48, 0x2d2a28], fox: [0xd9782d, 0xf1ede4, 0x2d2a28], owl: [0x8a6f55, 0xe5c66b, 0x3a302a], pelican: [0xefe7cf, 0xc2a37e, 0xc4553a] };
 const WHO = { gran: null, farmer: null, moss: 'possum', hal: 'coyote', mayor: 'pelican', edna: 'owl', sasha: 'fox', vance: 'beaver', dez: 'raccoon', bea: 'beaver', howie: 'coyote',
   mavis: 'possum', ladybug: 'fox', vale: 'fox', hoot: 'owl', bigtom: 'coyote', lindqvist: 'skunk', possumMom: 'possum', weighmaster: 'beaver' };
-const hex = (c) => '#' + c.toString(16).padStart(6, '0');
+const hex = (c: { toString: (arg0: number) => string; }) => '#' + c.toString(16).padStart(6, '0');
 
 export async function createRenderer({ container, phone, settings }) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -20,8 +21,8 @@ export async function createRenderer({ container, phone, settings }) {
   scene.fog = new THREE.Fog(0xd3dcdb, 40, 140);
   scene.add(new THREE.HemisphereLight(0xe3ecee, 0x8c8a6c, 1.4));
   const sun = new THREE.DirectionalLight(0xfff4e2, 2.2); sun.position.set(18, 30, 14); scene.add(sun);
-  const M = (c) => new THREE.MeshStandardMaterial({ color: c, flatShading: true, roughness: 0.9 });
-  const box = (x0, x1, y0, y1, z0, z1, c) => { const m = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0), M(c)); m.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2); scene.add(m); return m; };
+  const M = (c: number) => new THREE.MeshStandardMaterial({ color: c, flatShading: true, roughness: 0.9 });
+  const box = (x0: number, x1: number, y0: number, y1: number, z0: number, z1: number, c: number) => { const m = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0), M(c)); m.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2); scene.add(m); return m; };
   box(-20, 8.5, -1.3, 0, -20, 20, 0x95a87f); box(-20, 8.5, -3, -1.3, -20, 20, 0x7a5c43); box(8.5, 11.5, -1.6, -0.5, -20, 20, 0xd8c8a1);
   box(11.5, 20, -3, -0.9, -11, 20, 0x8cbdb6); box(11.5, 20, -3, 2.6, -20, -11, 0xa29e95); box(-20, 8.7, 0, 0.03, -5.2, -4, 0xcdb894);
   const rows = Array.from({ length: ROWS.count }, (_, r) => box(ROWS.x0, ROWS.x1, 0, 0.14, rowZ(r) - 0.6, rowZ(r) + 0.6, 0x7a5d43));
@@ -34,7 +35,7 @@ export async function createRenderer({ container, phone, settings }) {
   const giant = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), new THREE.MeshStandardMaterial({ color: 0xe3a35e, roughness: 0.7 })); giant.position.set(-15.5, 0, 9); scene.add(giant);
   const farmer = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.6, 8), M(0xa9a8ad)); scene.add(farmer);
   const mayor = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.6, 8), M(0xefe7cf)); mayor.position.set(PLACES.dock.x - 1, 0.5, PLACES.dock.z); scene.add(mayor);
-  const ripples = [];
+  const ripples: { t: number; }[] = [];
 
   // ---------------------------------------------------------- camera (prototype framing)
   const VIEW_H = 52, cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 500);
@@ -44,7 +45,7 @@ export async function createRenderer({ container, phone, settings }) {
   controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
   const DIR = new THREE.Vector3(-1, 1.25, 1).normalize();
   controls.target.set(-0.5, 0, -0.5); cam.position.copy(controls.target).addScaledVector(DIR, 100);
-  let W = 1, H = 1, inset = 0, insetTop = 0, glideA = null, orbit = false, fogAdd = 0, fogCur = 0.35;
+  let W = 1, H = 1, inset = 0, insetTop = 0, glideA: { t0: any; ms: any; a: any; b: any; z0: any; z1: any; }|null = null, orbit = false, fogAdd = 0, fogCur = 0.35;
   const homeZoom = () => Math.min(1.05, Math.max(0.38, (VIEW_H * W / H) / 60));
   function frameOrtho() {
     const aspect = W / H, shift = Math.max(-0.35, Math.min(0.35, (inset - insetTop) / H / 2)); // subject between HUD and sheet
@@ -54,14 +55,14 @@ export async function createRenderer({ container, phone, settings }) {
   function resize() { W = container.clientWidth || innerWidth; H = container.clientHeight || innerHeight; renderer.setSize(W, H); frameOrtho(); }
   addEventListener('resize', resize); resize();
   cam.zoom = homeZoom(); cam.updateProjectionMatrix();
-  function glide(x, z, zoom = cam.zoom, ms = 600) {
+  function glide(x: number|undefined, z: number|undefined, zoom = cam.zoom, ms = 600) {
     glideA = { t0: performance.now(), ms: Math.max(1, ms), a: controls.target.clone(), b: new THREE.Vector3(x, 0, z), z0: cam.zoom, z1: zoom };
   }
   const FR = { patch: [-1.5, 5, 1.1], giant: [-15.2, 9.6, 1.8], stand: [-5, -7, 1.8], barn: [-14, -13.4, 1.5], lot: [-17.6, -4.6, 1.6], scale: [-15, 16.6, 1.7], hives: [-4.8, -16, 1.8], dock: [12.7, 5.6, 3], sign: [-5, -7.3, 3] };
 
   // ---------------------------------------------------------- taps (tap vs pan: < 10 px and < 300 ms; hold 500 ms)
   const handlers = { tap: [], longpress: [] };
-  let down = null;
+  let down: { moved: any; held: any; x: any; y: any; timer: any; t: any; }|null = null;
   renderer.domElement.addEventListener('pointerdown', (e) => {
     down = { x: e.clientX, y: e.clientY, t: performance.now(), moved: false, held: false, timer: setTimeout(() => { if (down && !down.moved) { down.held = true; emit('longpress', e); } }, 500) };
   });
@@ -72,18 +73,18 @@ export async function createRenderer({ container, phone, settings }) {
     if (!down.moved && !down.held && performance.now() - down.t < 300) emit('tap', e);
     down = null;
   });
-  const emit = (type, e) => { const hit = pick(e.clientX, e.clientY); for (const fn of handlers[type]) fn(hit, e); };
+  const emit = (type: string, e: PointerEvent) => { const hit = pick(e.clientX, e.clientY); for (const fn of handlers[type]) fn(hit, e); };
   const ray = new THREE.Raycaster(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-  function ground(cx, cy) {
+  function ground(cx: number, cy: number) {
     const r = renderer.domElement.getBoundingClientRect();
     ray.setFromCamera(new THREE.Vector2(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1), cam);
     return ray.ray.intersectPlane(plane, new THREE.Vector3());
   }
-  function project(x, y, z) {
+  function project(x: number|undefined, y: number|undefined, z: number|undefined) {
     const v = new THREE.Vector3(x, y, z).project(cam);
     return { x: (v.x + 1) / 2 * W, y: (1 - v.y) / 2 * H, visible: Math.abs(v.x) <= 1 && Math.abs(v.y) <= 1 && v.z < 1 };
   }
-  function pick(cx, cy) {
+  function pick(cx: number, cy: number) {
     const g = ground(cx, cy);
     if (!g) return null;
     let best = null, bd = 24, bp = -1;
@@ -99,12 +100,12 @@ export async function createRenderer({ container, phone, settings }) {
 
   // ---------------------------------------------------------- portraits: a quick 2D face per species
   const pcache = new Map();
-  function portrait(key, opts = {}) {
+  function portrait(key: string, opts = {}) {
     const sp = SPC[key] ? key : WHO[key] ?? opts.species ?? 'possum', ck = `${key}|${sp}`;
     if (pcache.has(ck)) return pcache.get(ck);
     const c = document.createElement('canvas'); c.width = c.height = 128;
     const g = c.getContext('2d'), [fur, mark, nose] = SPC[sp] || SPC.possum;
-    const ear = (x) => { g.fillStyle = hex(mark); g.beginPath(); g.ellipse(x, 34, 16, 22, x < 64 ? -0.4 : 0.4, 0, 7); g.fill(); };
+    const ear = (x: number) => { g.fillStyle = hex(mark); g.beginPath(); g.ellipse(x, 34, 16, 22, x < 64 ? -0.4 : 0.4, 0, 7); g.fill(); };
     ear(36); ear(92);
     g.fillStyle = hex(fur); g.beginPath(); g.ellipse(64, 70, 44, 40, 0, 0, 7); g.fill();
     if (sp === 'skunk') { g.fillStyle = hex(mark); g.fillRect(58, 30, 12, 34); }
@@ -121,13 +122,13 @@ export async function createRenderer({ container, phone, settings }) {
 
   // ---------------------------------------------------------- sync
   let signText = '', species = '';
-  function repaintSign(text) {
+  function repaintSign(text: string) {
     const c = document.createElement('canvas'); c.width = 512; c.height = 96;
     const g = c.getContext('2d'); g.fillStyle = '#efe8d8'; g.fillRect(0, 0, 512, 96);
     g.fillStyle = '#3f4c43'; g.font = '700 40px Georgia, serif'; g.textAlign = 'center'; g.fillText(text, 256, 62, 480);
     standM.map?.dispose(); standM.map = new THREE.CanvasTexture(c); standM.map.colorSpace = THREE.SRGBColorSpace; standM.needsUpdate = true;
   }
-  function sync(s, rdt) {
+  function sync(s: State, rdt: number) {
     const night = s.clock.phase === 'halloween' || (s.clock.phase === 'weighoff' && s.weighoff?.stage === 'eve') || s.clock.phase === 'winter';
     fogCur += ((s.weather?.f ?? 0.35) + fogAdd - fogCur) * Math.min(1, rdt * 3);
     scene.background.setHex(night ? 0x1a2130 : 0xd3dcdb); scene.fog.color.copy(scene.background);
@@ -153,19 +154,19 @@ export async function createRenderer({ container, phone, settings }) {
 
   return {
     sync,
-    fx(ev) {
+    fx(ev: OutEvent) {
       if ((ev.type !== 'ripple' && ev.type !== 'tap') || ev.x == null || settings?.reduceMotion) return;
       const m = new THREE.Mesh(new THREE.RingGeometry(0.8, 1, 24).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true }));
       m.position.set(ev.x, 0.2, ev.z); scene.add(m); ripples.push({ m, t: 0 });
     },
     pick, project, portrait,
     cam: {
-      glide, home: (ms = 700) => glide(-0.5, -0.5, homeZoom(), ms), frame: (k) => FR[k] && glide(FR[k][0], FR[k][1], FR[k][2]),
-      setInset(px = 0, top = insetTop) { inset = Math.max(0, px); insetTop = Math.max(0, top); frameOrtho(); }, view: 'overhead', stroll() {}, title(on) { orbit = !!on; controls.enabled = !on; },
+      glide, home: (ms = 700) => glide(-0.5, -0.5, homeZoom(), ms), frame: (k: string|number) => FR[k] && glide(FR[k][0], FR[k][1], FR[k][2]),
+      setInset(px = 0, top = insetTop) { inset = Math.max(0, px); insetTop = Math.max(0, top); frameOrtho(); }, view: 'overhead', stroll() {}, title(on: any) { orbit = !!on; controls.enabled = !on; },
     },
-    setFogOverride(d) { fogAdd = d; },
+    setFogOverride(d: number) { fogAdd = d; },
     photo(w = 240, h = 180) { const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(renderer.domElement, 0, 0, w, h); return c.toDataURL('image/jpeg', 0.7); },
-    on(type, fn) { handlers[type]?.push(fn); },
+    on(type: string|number, fn: any) { handlers[type]?.push(fn); },
     info: () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles }),
     dispose() { renderer.dispose(); renderer.domElement.remove(); },
   };

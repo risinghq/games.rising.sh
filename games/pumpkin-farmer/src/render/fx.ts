@@ -6,15 +6,17 @@
 //   { type: 'tap', x, z, kind?, id? }        ripple + squash the tapped thing
 //   { type: 'ripple', x, z, color? }
 //   { type: 'squash', id, kind?, amount? }   squash-and-stretch a hero object (barn, stand, giant, ...)
-//   { type: 'coins', amount, x, z, to? }     coins arc from the world point to the cash counter
+//   { type: 'coins', amount, x, z }           coins arc from the world point to the cash counter
 //                                            (the element with [data-coin-target], else top-right)
 //   { type: 'pop', x, y?, z, color?, n? }    burst of chunky particles
 //   { type: 'sparkle', x, y?, z, n? }        twinkles (shinies, ripe rows, records)
-//   { type: 'float', text, x, y?, z, cls? }  floating text that rises and fades (alias 'text')
+//   { type: 'float', text, x, y?, z, cls? }  floating text that rises and fades
 //   { type: 'dust', x, z }                   a puff of dust (the farmer's sprint trail)
-//   { type: 'spout', x, y?, z }              a misty plume (the whale), particles fall back into the sea
+// The world calls spout(x, y?, z) directly: a misty plume (the whale), particles fall back into the sea.
 import * as THREE from 'three';
 import { clamp, lerp, billboards, dotTex, starTex } from './kit.js';
+import type { V3 } from './kit.js';
+import type { FxEvent, Kit } from './types.js';
 
 const CSS = `
 .qfx { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 1; }
@@ -25,16 +27,21 @@ const CSS = `
 .qfx-text.good { color: #fff3c4; } .qfx-text.bad { color: #ffd2c4; } .qfx-text.big { font-size: 22px; }
 `;
 
-export function createFx(K) {
+interface Particle {
+  x: number; y: number; z: number; vx: number; vy: number; vz: number; g: number; t: number; life: number;
+  s0: number; s1: number; a0: number; color: number; twinkle?: boolean; floor?: number;
+}
+interface CoinItem { kind: 'coin'; el: HTMLElement; t: number; life: number; from: Pt; to: Pt; lift: number }
+interface TextItem { kind: 'text'; el: HTMLElement; t: number; life: number; at: V3; stack: number }
+interface Pt { x: number; y: number }
+
+export function createFx(K: Kit) {
   const { scene, container } = K;
   // ---------------------------------------------------------------- DOM layer
-  let layer = null;
-  if (container) {
-    if (!document.getElementById('qfx-css')) { const st = document.createElement('style'); st.id = 'qfx-css'; st.textContent = CSS; document.head.appendChild(st); }
-    if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
-    layer = document.createElement('div'); layer.className = 'qfx'; container.appendChild(layer);
-  }
-  const domItems = [];
+  if (!document.getElementById('qfx-css')) { const st = document.createElement('style'); st.id = 'qfx-css'; st.textContent = CSS; document.head.appendChild(st); }
+  if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
+  const layer = document.createElement('div'); layer.className = 'qfx'; container.appendChild(layer);
+  const domItems: (CoinItem | TextItem)[] = [];
 
   // ---------------------------------------------------------------- ripples (ground rings)
   const ringGeo = new THREE.RingGeometry(0.82, 1, 40).rotateX(-Math.PI / 2);
@@ -44,58 +51,69 @@ export function createFx(K) {
     return { m, t: 1, dur: 0.55, delay: 0 };
   });
   let rippleNext = 0;
-  function ripple(x, z, color = 0xffffff, y0) {              // y0: on the water, not the ground under it
-    const y = y0 ?? (K.world?.heightAt(x, z) ?? 0) + 0.06;
+  function ripple(x: number, z: number, color = 0xffffff, y0?: number) {              // y0: on the water, not the ground under it
+    const y = y0 ?? K.world.heightAt(x, z) + 0.06;
     for (const delay of [0, 0.12]) {
       const r = ripples[rippleNext++ % ripples.length];
+      if (!r) break;
       r.m.position.set(x, y, z); r.m.material.color.setHex(color); r.t = -delay; r.delay = delay; r.m.visible = false;
     }
   }
 
   // ---------------------------------------------------------------- squash and stretch
-  const squashes = new Map();
+  interface Squash { t: number; amount: number; dur: number; base: THREE.Vector3 }
+  const squashes = new Map<THREE.Object3D, Squash>();
   // obj: an Object3D; amount ~0.15. A damped wobble around the object's resting scale.
-  function squash(obj, amount = 0.16, dur = 0.5) {
+  function squash(obj: THREE.Object3D | null | undefined, amount = 0.16, dur = 0.5) {
     if (!obj) return;
-    const base = obj.userData.baseScale ||= obj.scale.clone();
-    squashes.set(obj, { t: 0, amount: K.settings?.reduceMotion ? amount * 0.4 : amount, dur, base });
+    const stored: unknown = obj.userData.baseScale;
+    const base = stored instanceof THREE.Vector3 ? stored : obj.scale.clone();
+    obj.userData.baseScale = base;
+    squashes.set(obj, { t: 0, amount: K.settings.reduceMotion ? amount * 0.4 : amount, dur, base });
   }
-  const squashTarget = (ev) => K.squashables?.[ev.id] || K.squashables?.[ev.kind] || null;
+  const squashTarget = (...keys: (string | number | null | undefined)[]) => {
+    for (const k of keys) {
+      const o = k == null ? undefined : K.squashables[String(k)];
+      if (o) return o;
+    }
+    return null;
+  };
 
   // ---------------------------------------------------------------- particles (billboards)
   const sparks = billboards(64, { map: starTex(), blending: THREE.AdditiveBlending });
   const chunks = billboards(96, { map: dotTex() });
   scene.add(sparks.mesh, chunks.mesh);
-  const P = { sparks: [], chunks: [] };
+  const P: { sparks: Particle[]; chunks: Particle[] } = { sparks: [], chunks: [] };
   const col = new THREE.Color();
-  function spawn(list, cap, p) { if (list.length >= cap) list.shift(); list.push(p); }
+  function spawn(list: Particle[], cap: number, p: Particle) { if (list.length >= cap) list.shift(); list.push(p); }
   // sparkles: the twinkles that go with it (a close-up passes fewer: up close they are the size of a thumb)
-  function pop(x, y, z, color = 0xe0843a, n = 10, sparkles = 4) {
+  function pop(x: number, y: number, z: number, color = 0xe0843a, n = 10, sparkles = 4) {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2, v = 1.2 + Math.random() * 2.2;
       spawn(P.chunks, 96, { x, y, z, vx: Math.cos(a) * v, vy: 2.5 + Math.random() * 2.5, vz: Math.sin(a) * v, g: 9, t: 0, life: 0.6 + Math.random() * 0.3, s0: 0.22, s1: 0.05, a0: 1, color });
     }
     if (sparkles > 0) sparkle(x, y + 0.3, z, sparkles);
   }
-  function sparkle(x, y, z, n = 7) {
+  function sparkle(x: number, y: number, z: number, n = 7) {
     for (let i = 0; i < n; i++) {
       spawn(P.sparks, 64, { x: x + (Math.random() - 0.5) * 1.2, y: y + Math.random() * 0.9, z: z + (Math.random() - 0.5) * 1.2, vx: 0, vy: 0.5, vz: 0, g: 0, t: -i * 0.06, life: 0.7, s0: 0.1, s1: 0.5, a0: 1, color: 0xfff3c4, twinkle: true });
     }
   }
-  function dust(x, z, color = 0xcdb894) {
-    const y = (K.world?.heightAt(x, z) ?? 0) + 0.12;
+  function dust(x: number, z: number, color = 0xcdb894) {
+    const y = K.world.heightAt(x, z) + 0.12;
     spawn(P.chunks, 96, { x: x + (Math.random() - 0.5) * 0.3, y, z: z + (Math.random() - 0.5) * 0.3, vx: (Math.random() - 0.5) * 0.4, vy: 0.5, vz: (Math.random() - 0.5) * 0.4, g: 0, t: 0, life: 0.6, s0: 0.25, s1: 0.75, a0: 0.55, color });
   }
-  function spout(x, y = -0.6, z) {
+  function spout(x: number, y: number, z: number) {
     for (let i = 0; i < 3; i++) {
       spawn(P.chunks, 96, { x: x + (Math.random() - 0.5) * 0.2, y, z: z + (Math.random() - 0.5) * 0.2, vx: (Math.random() - 0.5) * 0.7, vy: 4.2 + Math.random() * 1.6,
         vz: (Math.random() - 0.5) * 0.7, g: 4.5, floor: -5, t: 0, life: 1.3, s0: 0.3, s1: 1.1, a0: 0.7, color: 0xf2f6f5 });
     }
   }
-  function stepParticles(b, list, dt) {
+  function stepParticles(b: ReturnType<typeof billboards>, list: Particle[], dt: number) {
     let i = 0;
     for (let k = list.length - 1; k >= 0; k--) {
       const p = list[k];
+      if (!p) continue;
       p.t += dt;
       if (p.t >= p.life) { list.splice(k, 1); continue; }
     }
@@ -114,20 +132,18 @@ export function createFx(K) {
 
   // ---------------------------------------------------------------- DOM: coins and floating text
   const proj = new THREE.Vector3();
-  function screenOf(x, y, z) {
-    if (!layer) return null;
+  function screenOf(x: number, y: number, z: number): Pt {
     proj.set(x, y, z).project(K.cam.active);
     return { x: (proj.x + 1) / 2 * layer.clientWidth, y: (1 - proj.y) / 2 * layer.clientHeight };
   }
-  function coinTarget() {
+  function coinTarget(): Pt {
     const el = document.querySelector('[data-coin-target]'), lr = layer.getBoundingClientRect();
     if (el) { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2 - lr.left, y: r.top + r.height / 2 - lr.top }; }
     return { x: layer.clientWidth - 40, y: 26 };
   }
-  function coins(amount = 10, x, z, to) {
-    if (!layer) return;
-    const from = screenOf(x, 0.8, z); if (!from) return;
-    const dst = to || coinTarget(), n = clamp(Math.round(Math.abs(amount) / 6), 3, 9);
+  function coins(amount: number, x: number, z: number) {
+    const from = screenOf(x, 0.8, z);
+    const dst = coinTarget(), n = clamp(Math.round(Math.abs(amount) / 6), 3, 9);
     for (let i = 0; i < n; i++) {
       const el = document.createElement('div'); el.className = 'qfx-coin'; layer.appendChild(el);
       const spread = (i - (n - 1) / 2) * 7;
@@ -135,40 +151,40 @@ export function createFx(K) {
     }
   }
   // two floaters at one spot ("+50% water" and "Squish!") stack instead of printing over each other
-  function float(text, x, y = 1.6, z, cls = '') {
-    if (!layer) return;
+  function float(text: string, x: number, y: number, z: number, cls = '') {
     const at = screenOf(x, y, z);
     let stack = 0;
-    if (at) for (const d of domItems) {
+    for (const d of domItems) {
       if (d.kind !== 'text' || d.t > d.life * 0.6) continue;
       const o = screenOf(...d.at);
-      if (o && Math.abs(o.x - at.x) < 90 && Math.abs(o.y - d.stack * 30 - at.y) < 34) stack = Math.max(stack, d.stack + 1);
+      if (Math.abs(o.x - at.x) < 90 && Math.abs(o.y - d.stack * 30 - at.y) < 34) stack = Math.max(stack, d.stack + 1);
     }
     const el = document.createElement('div'); el.className = 'qfx-text ' + cls; el.textContent = text; layer.appendChild(el);
     domItems.push({ el, kind: 'text', t: 0, life: 1.4, at: [x, y, z], stack: Math.min(stack, 3) });
   }
-  function stepDom(dt) {
+  function stepDom(dt: number) {
     for (let k = domItems.length - 1; k >= 0; k--) {
       const d = domItems[k];
+      if (!d) continue;
       d.t += dt;
       if (d.t >= d.life) { d.el.remove(); domItems.splice(k, 1); continue; }
-      if (d.t < 0) { d.el.style.opacity = 0; continue; }
+      if (d.t < 0) { d.el.style.opacity = '0'; continue; }
       const u = d.t / d.life;
       if (d.kind === 'coin') {
         const e = u * u * (3 - 2 * u), x = lerp(d.from.x, d.to.x, e), y = lerp(d.from.y, d.to.y, e) - Math.sin(u * Math.PI) * d.lift;
-        d.el.style.opacity = u > 0.9 ? (1 - u) * 10 : 1;
+        d.el.style.opacity = String(u > 0.9 ? (1 - u) * 10 : 1);
         d.el.style.transform = `translate(${x}px, ${y}px) scale(${1 - u * 0.35})`;
       } else {
-        const s = screenOf(...d.at); if (!s) continue;
-        d.el.style.opacity = u < 0.15 ? u / 0.15 : 1 - smoothish((u - 0.6) / 0.4);
-        d.el.style.transform = `translate(-50%, -100%) translate(${s.x}px, ${s.y - 46 * Math.sqrt(u) - (d.stack || 0) * 30}px) scale(${u < 0.12 ? 0.7 + u * 2.5 : 1})`;
+        const s = screenOf(...d.at);
+        d.el.style.opacity = String(u < 0.15 ? u / 0.15 : 1 - smoothish((u - 0.6) / 0.4));
+        d.el.style.transform = `translate(-50%, -100%) translate(${s.x}px, ${s.y - 46 * Math.sqrt(u) - d.stack * 30}px) scale(${u < 0.12 ? 0.7 + u * 2.5 : 1})`;
       }
     }
   }
-  const smoothish = (k) => (k <= 0 ? 0 : k >= 1 ? 1 : k * k * (3 - 2 * k));
+  const smoothish = (k: number) => (k <= 0 ? 0 : k >= 1 ? 1 : k * k * (3 - 2 * k));
 
   // ---------------------------------------------------------------- per frame + events
-  function update(dt) {
+  function update(dt: number) {
     for (const r of ripples) {
       if (r.t >= r.dur) { r.m.visible = false; continue; }
       r.t += dt;
@@ -189,21 +205,20 @@ export function createFx(K) {
     stepParticles(chunks, P.chunks, dt);
     stepDom(dt);
   }
-  function handle(ev) {
+  function handle(ev: FxEvent) {
     switch (ev.type) {
-      case 'tap': if (ev.x != null) ripple(ev.x, ev.z); squash(squashTarget(ev)); break;
+      case 'tap': ripple(ev.x, ev.z); squash(squashTarget(ev.id, ev.kind)); break;
       case 'ripple': ripple(ev.x, ev.z, ev.color); break;
-      case 'squash': squash(squashTarget(ev), ev.amount); break;
-      case 'coins': coins(ev.amount, ev.x ?? -5, ev.z ?? -7, ev.to); break;
+      case 'squash': squash(squashTarget(ev.id, ev.kind), ev.amount); break;
+      case 'coins': coins(ev.amount, ev.x, ev.z); break;
       case 'pop': pop(ev.x, ev.y ?? 0.5, ev.z, ev.color, ev.n, ev.sparkles); break;
       case 'sparkle': sparkle(ev.x, ev.y ?? 0.3, ev.z, ev.n); break;
-      case 'float': case 'text': float(ev.text, ev.x, ev.y ?? 1.6, ev.z, ev.cls); break;
+      case 'float': float(ev.text, ev.x, ev.y ?? 1.6, ev.z, ev.cls); break;
       case 'dust': dust(ev.x, ev.z, ev.color); break;
-      case 'spout': spout(ev.x, ev.y, ev.z); break;
     }
   }
   return {
     handle, update, ripple, squash, pop, sparkle, dust, spout, coins, float,
-    dispose() { layer?.remove(); ringGeo.dispose(); for (const r of ripples) r.m.material.dispose(); },
+    dispose() { layer.remove(); ringGeo.dispose(); for (const r of ripples) r.m.material.dispose(); },
   };
 }

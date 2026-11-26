@@ -13,18 +13,24 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import {
-  PI, clamp, lerp, smooth, rng, M, C, PC, VC, part, prepGeo, mergeStatic, mergeLocal, canvasTex, liveTex, instanced,
+  PI, clamp, lerp, type V3, smooth, rng, M, C, PC, VC, part, prepGeo, mergeStatic, mergeLocal, canvasTex, liveTex, instanced,
   billboards, glowTex, PG, STEM, ICO0, ICO1, CYL, CYL8, CONE, BOX, dummy,
 } from './kit.js';
 import { fogPatch } from './fog.js';
 import { PLACES, ROWS, ROAD, rowZ } from '../sim/layout.js';
+import type { State } from '../sim/types.js';
+import type { Kit } from './types.js';
+
+type XZ = [number, number];
+type N4 = [number, number, number, number];
+type N5 = [number, number, number, number, number];
 
 export const LAND_E = 8.5, SHORE_E = 11.5;
 // visual paths (sandy strips on the tile); the walkable graph lives in sim/layout.js. The lane itself is a one-way road
 // (ROAD, drawn as packed earth, two lanes wide) with its footpath on the stand's side; at its end it bends north up the
 // beach.
 const WALK = ROAD.walk;
-const PATHS = [
+const PATHS: XZ[][] = [
   [[-20, WALK], [7.9, WALK]],                                           // the lane's footpath, to the patch's east path
   [[-10.6, WALK], [-10.6, 14.4], [7.4, 14.4], [7.4, WALK]],            // around the patch
   [[-14, WALK], [-14, -11]],                                            // barn
@@ -34,23 +40,28 @@ const PATHS = [
   [[-18.6, 4.6], [-12.4, 4.6], [-12.4, 13.4], [-18.6, 13.4], [-18.6, 4.6]], // around the giant
   [[-15.5, 13.4], [-15.5, 15.5]],                                       // to the weigh station
 ];
-function segDist(px, pz, ax, az, bx, bz) {
+function segDist(px: number, pz: number, ax: number, az: number, bx: number, bz: number) {
   const dx = bx - ax, dz = bz - az, t = clamp(((px - ax) * dx + (pz - az) * dz) / (dx * dx + dz * dz), 0, 1);
   return Math.hypot(px - ax - dx * t, pz - az - dz * t);
 }
 // the road: both lanes from Marlene along the patch, and their bends at the lane's end up onto the sand (the beach road
 // beyond is ruts)
-const RZ = ROAD.z, RS = ROAD.zStand, BENDS = [[RZ, ...ROAD.bend.patch], [RS, ...ROAD.bend.stand]];
-const onRoad = (x, z) => (x > -20 && x <= ROAD.bend.stand[0] && z > RS - 0.5 && z < RZ + 0.45)
+const RZ = ROAD.z, RS = ROAD.zStand, BENDS: V3[] = [[RZ, ...ROAD.bend.patch], [RS, ...ROAD.bend.stand]];
+const onRoad = (x: number, z: number) => (x > -20 && x <= ROAD.bend.stand[0] && z > RS - 0.5 && z < RZ + 0.45)
   || (x > ROAD.bend.stand[0] && x < LAND_E && BENDS.some(([z0, e, r]) => (x <= e ? Math.abs(z - z0) < 0.47
     : z < z0 + 0.45 && Math.abs(Math.hypot(x - e, z - (z0 - r)) - r) < 0.47)));
-export function pathDist(x, z) {
+export function pathDist(x: number, z: number) {
   let d = 1e9;
-  for (const p of PATHS) for (let i = 0; i < p.length - 1; i++) d = Math.min(d, segDist(x, z, ...p[i], ...p[i + 1]));
+  for (const p of PATHS) {
+    for (let i = 0; i < p.length - 1; i++) {
+      const a = p[i], b = p[i + 1];
+      if (a && b) d = Math.min(d, segDist(x, z, a[0], a[1], b[0], b[1]));
+    }
+  }
   return d;
 }
 // ground height: flat land, sloping beach, the dock
-export function heightAt(x, z) {
+export function heightAt(x: number, z: number) {
   if (x <= LAND_E) return 0;
   let y = -Math.min(x - LAND_E, 3) / 3 * 1.23;
   if (z > 5.45 && z < 6.55 && x > 9.6 && x < 16.4) y = Math.max(y, -0.3);
@@ -61,54 +72,56 @@ export function heightAt(x, z) {
 const MZ = { x0: 0.3, z0: -19.8, u: 0.727, cols: 5, rows: 8 };
 const GW = MZ.cols * 2 + 1, GH = MZ.rows * 2 + 1;
 const R0 = rng(11);
-const maze = Array.from({ length: GW }, () => Array(GH).fill(true));
-(function carve(cx, cz) {
-  maze[cx * 2 + 1][cz * 2 + 1] = false;
-  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]].map((d) => [d, R0.rand()]).sort((a, b) => a[1] - b[1]).map((d) => d[0]);
+const maze: boolean[][] = Array.from({ length: GW }, () => Array<boolean>(GH).fill(true));
+const wallCell = (gx: number, gz: number) => maze[gx]?.[gz] === true;
+const openCell = (gx: number, gz: number) => { const col = maze[gx]; if (col) col[gz] = false; };
+(function carve(cx: number, cz: number) {
+  openCell(cx * 2 + 1, cz * 2 + 1);
+  const dirs = ([[1, 0], [-1, 0], [0, 1], [0, -1]] satisfies XZ[]).map((d) => ({ d, k: R0.rand() })).sort((a, b) => a.k - b.k).map((o) => o.d);
   for (const [dx, dz] of dirs) {
     const nx = cx + dx, nz = cz + dz;
-    if (nx < 0 || nz < 0 || nx >= MZ.cols || nz >= MZ.rows || !maze[nx * 2 + 1][nz * 2 + 1]) continue;
-    maze[cx * 2 + 1 + dx][cz * 2 + 1 + dz] = false;
+    if (nx < 0 || nz < 0 || nx >= MZ.cols || nz >= MZ.rows || !wallCell(nx * 2 + 1, nz * 2 + 1)) continue;
+    openCell(cx * 2 + 1 + dx, cz * 2 + 1 + dz);
     carve(nx, nz);
   }
 })(2, 7);
-maze[5][GH - 1] = false; maze[1][0] = false;
-export const mazeWallAt = (x, z) => {
+openCell(5, GH - 1); openCell(1, 0);
+export const mazeWallAt = (x: number, z: number) => {
   const gx = Math.floor((x - MZ.x0) / MZ.u), gz = Math.floor((z - MZ.z0) / MZ.u);
-  return gx >= 0 && gz >= 0 && gx < GW && gz < GH && maze[gx][gz];
+  return gx >= 0 && gz >= 0 && gx < GW && gz < GH && wallCell(gx, gz);
 };
 
 const GRASS = [0x95a87f, 0x8da279, 0x9cae86, 0x889b73, 0xa3b38c, 0x90a57a];
 const SCRUB = [0x6d7a52, 0x75804f, 0x68704a, 0x7b7a50, 0x707c56];
-const inRowBand = (x, z) => {
+const inRowBand = (x: number, z: number) => {
   if (x <= ROWS.x0 || x >= ROWS.x1) return -1;
   const r = Math.round((z + 1) / 2);
   return r >= 0 && r < ROWS.count && Math.abs(z - rowZ(r)) < 0.6 ? r : -1;
 };
 // HIVES: the 4 built hives, then the 2 spots the shop can fill (layout.PLACES.hives)
-const HIVE_COLS = [[0xa8c6c0, 0xefe5c8], [0xe9d18a, 0xa8c6c0], [0xefe5c8, 0xe2a68f], [0xe2a68f, 0xe9d18a], [0xa8c6c0, 0xe9d18a], [0xefe5c8, 0xa8c6c0]];
-const BALES = [[-9.2, -11.6, 0, 0], [-8.2, -11.6, 0, 0], [-7.2, -11.6, 0, 0], [-8.7, -11.6, 1, 0], [-7.7, -11.6, 1, 0], [-8.2, -11.6, 2, 0],
+const HIVE_COLS: XZ[] = [[0xa8c6c0, 0xefe5c8], [0xe9d18a, 0xa8c6c0], [0xefe5c8, 0xe2a68f], [0xe2a68f, 0xe9d18a], [0xa8c6c0, 0xe9d18a], [0xefe5c8, 0xa8c6c0]];
+const BALES: N4[] = [[-9.2, -11.6, 0, 0], [-8.2, -11.6, 0, 0], [-7.2, -11.6, 0, 0], [-8.7, -11.6, 1, 0], [-7.7, -11.6, 1, 0], [-8.2, -11.6, 2, 0],
   [-12, -6.85, 0, 0.1], [-1, -6.85, 0, -0.1], [6.4, -6.85, 0, 0.3], [-18.9, 2.6, 0, 1.4], [-18.9, 1.5, 0, 1.6], [3.3, -7.9, 0, 0], [5.3, -7.9, 0, 0], [-3.1, -8.4, 0, 0.5]];
-const JACKS = [[-12, 0.5, -6.85, 0.2], [-1, 0.5, -6.85, -0.2], [-5.8, 0.96, -7.25, 0], [-4.3, 0.96, -7.25, 0.1], [-12.9, 0, 6.4, -0.6], [-12.4, 0, -10.6, 0.3], [3.3, 0.5, -7.9, 0.2], [5.3, 0.5, -7.9, -0.2]];
+const JACKS: N4[] = [[-12, 0.5, -6.85, 0.2], [-1, 0.5, -6.85, -0.2], [-5.8, 0.96, -7.25, 0], [-4.3, 0.96, -7.25, 0.1], [-12.9, 0, 6.4, -0.6], [-12.4, 0, -10.6, 0.3], [3.3, 0.5, -7.9, 0.2], [5.3, 0.5, -7.9, -0.2]];
 // lanterns and the string-light poles stand back off the road's verges (cars pass between them)
-const LANTERNS = [[-11.5, -3.15], [7.95, -2.85], [8.3, 15.3], [-11.5, 15.3], [-17, -3.15]];
-const POLES = [-19, -13.5, -8, -1.6, 3, 7.8].map((x) => [x, 2.6, -6.55]);
+const LANTERNS: XZ[] = [[-11.5, -3.15], [7.95, -2.85], [8.3, 15.3], [-11.5, 15.3], [-17, -3.15]];
+const POLES = [-19, -13.5, -8, -1.6, 3, 7.8].map((x): V3 => [x, 2.6, -6.55]);
 // shade sail frame (the cloth itself is giant.js state); NW, NE, SW, SE corner heights
 const GX = PLACES.giant.x, GZ = PLACES.giant.z;
-export const SAIL = { x: GX + 0.7, z: GZ + 0.6, h: 1.6, y: [3.7, 3.35, 3.35, 3.0] };
-export const sailY = (u, v) => lerp(lerp(SAIL.y[0], SAIL.y[1], u), lerp(SAIL.y[2], SAIL.y[3], u), v);
-const sailCorners = [[0, 0], [1, 0], [1, 1], [0, 1]].map(([u, v]) => [SAIL.x + (u * 2 - 1) * SAIL.h, sailY(u, v), SAIL.z + (v * 2 - 1) * SAIL.h]);
+export const SAIL = { x: GX + 0.7, z: GZ + 0.6, h: 1.6, y: [3.7, 3.35, 3.35, 3.0] satisfies N4 };
+export const sailY = (u: number, v: number) => lerp(lerp(SAIL.y[0], SAIL.y[1], u), lerp(SAIL.y[2], SAIL.y[3], u), v);
+const sailCorners = ([[0, 0], [1, 0], [1, 1], [0, 1]] satisfies XZ[]).map(([u, v]): V3 => [SAIL.x + (u * 2 - 1) * SAIL.h, sailY(u, v), SAIL.z + (v * 2 - 1) * SAIL.h]);
 
 // first-person obstacles (the prototype's OBST)
-const OBST = [
-  ...BALES.map(([x, z]) => [x, z, 0.62]), ...PLACES.hives.slice(0, 4).map(([x, z]) => [x, z, 0.6]), ...POLES.map(([x, , z]) => [x, z, 0.2]),
-  ...JACKS.filter((j) => j[1] === 0).map(([x, , z]) => [x, z, 0.45]), ...sailCorners.map(([x, , z]) => [x, z, 0.2]),
+const OBST: V3[] = [
+  ...BALES.map(([x, z]): V3 => [x, z, 0.62]), ...PLACES.hives.slice(0, 4).map(([x, z]): V3 => [x, z, 0.6]), ...POLES.map(([x, , z]): V3 => [x, z, 0.2]),
+  ...JACKS.filter((j) => j[1] === 0).map(([x, , z]): V3 => [x, z, 0.45]), ...sailCorners.map(([x, , z]): V3 => [x, z, 0.2]),
   [-3, -6.6, 0.75], [-1.6, 6, 0.4], [-13.2, 12.4, 0.25], [9.6, -1.5, 0.4],
   [-13.4, 17.45, 1.3], [-11.6, 16.95, 1.15], [-10.4, 16.7, 0.8], [-14.9, 15.55, 0.25],
-  ...LANTERNS.map(([x, z]) => [x, z, 0.2]),
+  ...LANTERNS.map(([x, z]): V3 => [x, z, 0.2]),
   [-19.0, -19.0, 0.6], [-19.2, 16.4, 0.5], [7.4, 18.4, 0.5], [-8.6, 18.6, 0.6],
 ];
-export function blocked(x, z) {
+export function blocked(x: number, z: number) {
   for (const [ox, oz, r] of OBST) if ((x - ox) ** 2 + (z - oz) ** 2 < (r + 0.25) ** 2) return true;
   if (x > -6.8 && x < -3.2 && z > -8.1 && z < -6.8) return true; // farm stand
   if (x < -19.4 || x > 19.4 || z < -19.4 || z > 19.4) return true;
@@ -116,31 +129,30 @@ export function blocked(x, z) {
   if (x > 10.3 && !onDock) return true;
   if (x > -17.6 && x < -10.4 && z > -17.1 && z < -10.9) return true;
   if (Math.hypot(x - GX, z - GZ) < 2.6) return true;
-  for (const [ox, oz] of [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2]]) if (mazeWallAt(x + ox, z + oz)) return true;
+  for (const [ox, oz] of [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2]] satisfies XZ[]) if (mazeWallAt(x + ox, z + oz)) return true;
   return false;
 }
 
-export function createWorld(K) {
+export function createWorld(K: Kit) {
   const { scene } = K;
   const root = new THREE.Group(); root.name = 'world'; scene.add(root);
   const statics = new THREE.Group();
-  const heroes = {};                 // id -> group that squashes on tap
-  const glows = [];                  // [x, y, z, size, strength] -> one additive billboard set
-  const noShadow = (m) => ((m.castShadow = false), m);
-  const hero = (id, x, y, z, ry = 0) => {
+  const heroes: Record<string, THREE.Group> = {};                 // id -> group that squashes on tap
+  const glows: N5[] = [];                  // [x, y, z, size, strength] -> one additive billboard set
+  const noShadow = <T extends THREE.Mesh>(m: T): T => ((m.castShadow = false), m);
+  const hero = (id: string, x: number, y: number, z: number, ry = 0) => {
     const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = ry; g.name = id;
     heroes[id] = g; root.add(g); return g;
   };
-  const glow = (x, y, z, s, k = 1) => glows.push([x, y, z, s, k]);
+  const glow = (x: number, y: number, z: number, s: number, k = 1) => glows.push([x, y, z, s, k]);
 
   // ---------------------------------------------------------------- the diorama tile
   // Vertex-coloured ground. Row strips remember their triangles so patch.js can repaint them
   // (bramble scrub before a row is cleared, darker soil after watering).
-  const rowTris = Array.from({ length: ROWS.count }, () => []);
-  let ground, groundCols, groundBase, scrubCols;
-  {
+  const rowTris = Array.from({ length: ROWS.count }, (): number[] => []);
+  const { groundCols, groundBase, scrubCols } = (() => {
     const r = R0; // continue the maze stream, as the prototype did
-    const groundColor = (x, z, c) => {
+    const groundColor = (x: number, z: number, c: THREE.Color) => {
       if (onRoad(x, z)) return c.setHex(r.rand() < 0.5 ? 0xb4a383 : 0xae9d7e);
       if (pathDist(x, z) < 0.62) return c.setHex(r.rand() < 0.5 ? 0xcdb894 : 0xc4ae89);
       if (x > -9.6 && x < 6.6 && z > -2.6 && z < 12.6) {
@@ -157,38 +169,38 @@ export function createWorld(K) {
     };
     const W = 20 + LAND_E, g = new THREE.PlaneGeometry(W, 40, Math.round(W * 2), 80);
     g.rotateX(-PI / 2); g.translate(-20 + W / 2, 0, 0);
-    const p = g.attributes.position;
+    const p = g.getAttribute('position');
     for (let i = 0; i < p.count; i++) {
       const x = p.getX(i), z = p.getZ(i);
       if (x > -19.9 && x < LAND_E - 0.1 && Math.abs(z) < 19.9 && pathDist(x, z) > 0.8 && !onRoad(x, z)) p.setY(i, r.rr(-0.035, 0.035));
     }
     const ng = g.toNonIndexed(); g.dispose();
-    const pos = ng.attributes.position, cols = new Float32Array(pos.count * 3), c = new THREE.Color();
-    const scrub = rng(4242); scrubCols = new Float32Array(pos.count * 3);
+    const pos = ng.getAttribute('position'), cols = new Float32Array(pos.count * 3), c = new THREE.Color();
+    const scrub = rng(4242), scrubCols = new Float32Array(pos.count * 3);
     for (let t = 0; t < pos.count; t += 3) {
       const cx = (pos.getX(t) + pos.getX(t + 1) + pos.getX(t + 2)) / 3, cz = (pos.getZ(t) + pos.getZ(t + 1) + pos.getZ(t + 2)) / 3;
       groundColor(cx, cz, c);
       for (let k = 0; k < 3; k++) cols.set([c.r, c.g, c.b], (t + k) * 3);
       const row = inRowBand(cx, cz);
       if (row >= 0) {
-        rowTris[row].push(t);
+        rowTris[row]?.push(t);
         c.setHex(scrub.pick(SCRUB));
         for (let k = 0; k < 3; k++) scrubCols.set([c.r, c.g, c.b], (t + k) * 3);
       }
     }
-    groundBase = cols.slice();
-    ng.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+    const groundBase = cols.slice(), groundCols = new THREE.BufferAttribute(cols, 3);
+    ng.setAttribute('color', groundCols);
     ng.computeVertexNormals();
-    groundCols = ng.attributes.color;
-    ground = new THREE.Mesh(ng, VC);
+    const ground = new THREE.Mesh(ng, VC);
     ground.receiveShadow = true;
     root.add(ground);
-  }
+    return { groundCols, groundBase, scrubCols };
+  })();
   // Repaint a row strip: mode 'soil' (tilled, darkened by wetness 0..1) or 'scrub' (overgrown).
-  function paintRow(r, mode, wet = 0) {
+  function paintRow(r: number, mode: string, wet = 0) {
     const a = groundCols.array, k = lerp(1, 0.66, clamp(wet, 0, 1));
-    for (const t of rowTris[r]) {
-      for (let i = t * 3; i < t * 3 + 9; i++) a[i] = mode === 'scrub' ? scrubCols[i] : groundBase[i] * k;
+    for (const t of rowTris[r] ?? []) {
+      for (let i = t * 3; i < t * 3 + 9; i++) a[i] = mode === 'scrub' ? scrubCols[i] ?? 0 : (groundBase[i] ?? 0) * k;
     }
     groundCols.needsUpdate = true;
   }
@@ -196,7 +208,7 @@ export function createWorld(K) {
   // ---------------------------------------------------------------- strata, beach, bluff, rocks
   {
     const r = rng(101);
-    const slab = (x0, x1, y0, y1, z0, z1, hex) =>
+    const slab = (x0: number, x1: number, y0: number, y1: number, z0: number, z1: number, hex: number) =>
       part(BOX, C(hex), [(x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2], [x1 - x0, y1 - y0, z1 - z0], [0, 0, 0], statics);
     slab(-20, LAND_E, -0.26, -0.02, -20, 20, 0x7f9469);
     slab(-20, LAND_E, -1.3, -0.26, -20, 20, 0x7a5c43);
@@ -231,7 +243,7 @@ export function createWorld(K) {
     // rocks hanging under the floating tile
     // (their random tilt must never poke a corner up through the tile, so sink any that would)
     const box = new THREE.Box3();
-    for (const [x, z, sx, sy, sz] of [[-12, -8, 7, 4.5, 6], [2, 6, 8, 5, 7], [-5, 12, 6, 4, 6], [13, -12, 6, 5, 6], [14, 9, 5, 3.5, 6], [-15, 12, 5, 3.5, 5], [5, -13, 5, 4, 5]]) {
+    for (const [x, z, sx, sy, sz] of [[-12, -8, 7, 4.5, 6], [2, 6, 8, 5, 7], [-5, 12, 6, 4, 6], [13, -12, 6, 5, 6], [14, 9, 5, 3.5, 6], [-15, 12, 5, 3.5, 5], [5, -13, 5, 4, 5]] satisfies N5[]) {
       const m = part(ICO0, C(0x8a8680), [x, -5.4, z], [sx, sy, sz], [r.rand(), r.rand() * 3, r.rand() * 0.4], statics);
       m.updateMatrixWorld(true);
       const top = box.setFromObject(m, true).max.y;
@@ -245,7 +257,7 @@ export function createWorld(K) {
   root.add(waterSide);
   const waterGeo = new THREE.PlaneGeometry(10, 31, 20, 62);
   waterGeo.rotateX(-PI / 2); waterGeo.translate(15, -0.88, 4.5);
-  const waterBase = waterGeo.attributes.position.array.slice();
+  const waterBase = waterGeo.getAttribute('position').array.slice();
   const waterMat = M(0x8cbdb6, { transparent: true, opacity: 0.9, roughness: 0.35 });
   const water = new THREE.Mesh(waterGeo, waterMat);
   water.receiveShadow = true;
@@ -259,14 +271,16 @@ export function createWorld(K) {
   const barnGlow = M(0x3b2f26, { emissive: 0xff9a45, emissiveIntensity: 0 });
   {
     const g = hero('barn', PLACES.barn.x, 0, PLACES.barn.z), bw = 3.25, depth = 5.5;
-    const prof = [[-bw, 0], [bw, 0], [bw, 3], [2.35, 4.35], [0, 5.2], [-2.35, 4.35], [-bw, 3]];
+    const prof = [[-bw, 0], [bw, 0], [bw, 3], [2.35, 4.35], [0, 5.2], [-2.35, 4.35], [-bw, 3]] satisfies XZ[];
     const s = new THREE.Shape(); prof.forEach(([x, y], i) => (i ? s.lineTo(x, y) : s.moveTo(x, y)));
     const eg = new THREE.ExtrudeGeometry(s, { depth, bevelEnabled: false }); eg.translate(0, 0, -depth / 2);
     part(eg, C(0xa6574a), [0, 0, 0], [1, 1, 1], [0, 0, 0], g);
     const roof = C(0x5d6168);
-    const edge = [[-bw, 3], [-2.35, 4.35], [0, 5.2], [2.35, 4.35], [bw, 3]];
+    const edge = [[-bw, 3], [-2.35, 4.35], [0, 5.2], [2.35, 4.35], [bw, 3]] satisfies XZ[];
     for (let i = 0; i < 4; i++) {
-      const [ax, ay] = edge[i], [bx, by] = edge[i + 1], dx = bx - ax, dy = by - ay, L = Math.hypot(dx, dy);
+      const e0 = edge[i], e1 = edge[i + 1];
+      if (!e0 || !e1) continue;
+      const [ax, ay] = e0, [bx, by] = e1, dx = bx - ax, dy = by - ay, L = Math.hypot(dx, dy);
       part(BOX, roof, [(ax + bx) / 2 - dy / L * 0.08, (ay + by) / 2 + dx / L * 0.08, 0], [L + 0.24, 0.16, depth + 0.5], [0, 0, Math.atan2(dy, dx)], g);
     }
     const white = C(0xf1ede4), fz = depth / 2;
@@ -286,7 +300,7 @@ export function createWorld(K) {
 
   // ---------------------------------------------------------------- farm stand (+ live farm-name sign)
   const glowMat = M(0x5a4a38, { emissive: 0xffc070, emissiveIntensity: 0 });
-  const standSign = liveTex(512, 96, (g, w, h, name) => {
+  const standSign = liveTex(512, 96, (g, w, h, name: string) => {
     g.fillStyle = '#efe8d8'; g.fillRect(0, 0, w, h);
     g.fillStyle = '#3f4c43'; g.textAlign = 'center'; g.textBaseline = 'alphabetic';
     let px = 40; g.font = `700 ${px}px Georgia, serif`;
@@ -298,7 +312,7 @@ export function createWorld(K) {
   {
     const r = rng(202), g = hero('stand', PLACES.stand.x, 0, PLACES.stand.z);
     part(BOX, woodMat, [0, 0.48, 0.2], [3.2, 0.95, 0.9], [0, 0, 0], g);
-    for (const [dx, dz] of [[-1.55, -0.3], [1.55, -0.3], [-1.55, 0.6], [1.55, 0.6]]) part(CYL, driftMat, [dx, 1.15, dz], [0.06, 2.3, 0.06], [0, 0, 0], g);
+    for (const [dx, dz] of [[-1.55, -0.3], [1.55, -0.3], [-1.55, 0.6], [1.55, 0.6]] satisfies XZ[]) part(CYL, driftMat, [dx, 1.15, dz], [0.06, 2.3, 0.06], [0, 0, 0], g);
     for (let i = 0; i < 6; i++) part(BOX, C(i % 2 ? 0xf1ede4 : 0x8fb9b1), [-1.5 + 0.6 * i + 0.3, 2.35, 0.15], [0.6, 0.08, 1.6], [0.22, 0, 0], g);
     // the sign hangs from the canopy's front edge (the prototype had it under the canopy, where the overhead
     // camera can't see it, and the new-farm flow repaints it in front of the player)
@@ -315,17 +329,19 @@ export function createWorld(K) {
     const r = rng(203);
     wagon.position.set(PLACES.corral.x, 0, PLACES.corral.z); wagon.rotation.y = 0.2; root.add(wagon);
     part(BOX, C(0xa6574a), [0, 0.42, 0], [1.0, 0.28, 0.6], [0, 0, 0], wagon);
-    for (const [dx, dz] of [[-0.35, -0.3], [0.35, -0.3], [-0.35, 0.3], [0.35, 0.3]]) part(CYL8, C(0x3e3b38), [dx, 0.17, dz], [0.17, 0.06, 0.17], [PI / 2, 0, 0], wagon);
+    for (const [dx, dz] of [[-0.35, -0.3], [0.35, -0.3], [-0.35, 0.3], [0.35, 0.3]] satisfies XZ[]) part(CYL8, C(0x3e3b38), [dx, 0.17, dz], [0.17, 0.06, 0.17], [PI / 2, 0, 0], wagon);
     for (let i = 0; i < 3; i++) part(PG, PC(0xd8762c), [-0.25 + i * 0.25, 0.55, r.rr(-0.1, 0.1)], [0.17, 0.17, 0.17], [0, r.rand() * 6, 0], wagon);
     mergeLocal(wagon, true);
   }
 
   // ---------------------------------------------------------------- beehives & bees
   const HV = PLACES.hives, hx = -4.8, hz = -16.25;
-  const buildHives = (g, from, to) => {
+  const buildHives = (g: THREE.Group, from: number, to: number) => {
     const r = rng(300 + from);
     for (let i = from; i < to; i++) {
-      const [x0, z0] = HV[i], x = x0 - g.position.x, z = z0 - g.position.z, cols = HIVE_COLS[i], ry = r.rr(-0.15, 0.15);
+      const h = HV[i], cols = HIVE_COLS[i];
+      if (!h || !cols) continue;
+      const x = h[0] - g.position.x, z = h[1] - g.position.z, ry = r.rr(-0.15, 0.15);
       part(BOX, C(0x6b5a4a), [x, 0.12, z], [0.9, 0.24, 0.75], [0, ry, 0], g);
       part(BOX, C(cols[0]), [x, 0.5, z], [0.78, 0.52, 0.64], [0, ry, 0], g);
       part(BOX, C(cols[1]), [x, 0.96, z], [0.78, 0.4, 0.64], [0, ry, 0], g);
@@ -337,13 +353,13 @@ export function createWorld(K) {
   buildHives(hero('hives', hx, 0, hz), 0, 4);
   const extraHives = [4, 5].map((i) => { const g = new THREE.Group(); g.position.set(hx, 0, hz); root.add(g); buildHives(g, i, i + 1); g.visible = false; return g; });
   {
-    const r = rng(310), flowers = [];
+    const r = rng(310), flowers: XZ[] = [];
     for (let i = 0; i < 140; i++) flowers.push([r.rr(-9, -0.6), r.rr(-19.4, -17.6)]);
     for (let i = 0; i < 40; i++) flowers.push([r.rr(12, 19.5), r.rr(-19.5, -11.5)]);
     instanced(ICO0, M(0xffffff), flowers, ([x, z], d) => { d.position.set(x, (x > 11 ? 2.85 : 0.08) + r.rr(0, 0.15), z); d.scale.setScalar(r.rr(0.05, 0.09)); return r.pick([0x9d86b8, 0xe8c95a, 0xf4f1ea, 0xd98aa0]); }, false, root);
   }
   const beeGeo = (() => {
-    const parts = [[ICO0, [0, 0, 0], [0.06, 0.055, 0.085], 0xf2c14e], [ICO0, [0, 0.005, 0.07], [0.045, 0.045, 0.045], 0x2d2a26], [ICO0, [0.06, 0.05, 0], [0.06, 0.012, 0.035], 0xffffff], [ICO0, [-0.06, 0.05, 0], [0.06, 0.012, 0.035], 0xffffff]];
+    const parts: [THREE.BufferGeometry, V3, V3, number][] = [[ICO0, [0, 0, 0], [0.06, 0.055, 0.085], 0xf2c14e], [ICO0, [0, 0.005, 0.07], [0.045, 0.045, 0.045], 0x2d2a26], [ICO0, [0.06, 0.05, 0], [0.06, 0.012, 0.035], 0xffffff], [ICO0, [-0.06, 0.05, 0], [0.06, 0.012, 0.035], 0xffffff]];
     return mergeGeometries(parts.map(([g, p, s, hex]) => prepGeo(g, new THREE.Matrix4().compose(new THREE.Vector3(...p), new THREE.Quaternion(), new THREE.Vector3(...s)), new THREE.Color(hex))));
   })();
   const BEES = 26;
@@ -354,12 +370,11 @@ export function createWorld(K) {
   const beeData = (() => {
     const r = rng(321);
     return Array.from({ length: BEES }, (_, i) => ({
-      hive: i % 6, bloomIdx: i * 7,
+      hive: i % 6, bloomIdx: i * 7, cur: null as THREE.Vector3 | null,
       r: r.rr(0.4, 1.0), a: r.rr(0.6, 1.4), b: r.rr(0.8, 1.8), p: r.rand() * 10, commute: r.rr(0.12, 0.22),
     }));
   })();
-  const beeHome = (i) => new THREE.Vector3(HV[i][0], 0.9, HV[i][1]);
-  const HOMES = HV.map((_, i) => beeHome(i));
+  const HOMES = HV.map(([x, z]) => new THREE.Vector3(x, 0.9, z));
 
   // ---------------------------------------------------------------- corn maze
   {
@@ -368,21 +383,21 @@ export function createWorld(K) {
     // (the stalk's ends, the tassel's base), and each leaf is one bent, double-sided strip instead of a paper-thin box
     // (46 triangles a stalk, was 164; the same silhouette from every angle)
     const cornGeo = (() => {
-      const gs = [new THREE.CylinderGeometry(0.03, 0.05, 1.7, 4, 1, true).translate(0, 0.85, 0), new THREE.ConeGeometry(0.06, 0.28, 4, 1, true).translate(0, 1.8, 0)];
+      const gs: THREE.BufferGeometry[] = [new THREE.CylinderGeometry(0.03, 0.05, 1.7, 4, 1, true).translate(0, 0.85, 0), new THREE.ConeGeometry(0.06, 0.28, 4, 1, true).translate(0, 1.8, 0)];
       for (let i = 0; i < 6; i++) {
         const m = new THREE.Matrix4().compose(new THREE.Vector3(0, 0.4 + i * 0.22, 0), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, i * 2.3, 0.45 + (i % 2) * 0.25)), new THREE.Vector3(1, 1, 1));
         const leaf = new THREE.PlaneGeometry(0.62, 0.11, 2, 1).rotateX(-PI / 2).translate(0.29, 0, 0);
-        const lp = leaf.attributes.position;
+        const lp = leaf.getAttribute('position');
         for (let k = 0; k < lp.count; k++) { const x = lp.getX(k); lp.setY(k, lp.getY(k) - 0.35 * (x / 0.6) ** 2); if (x > 0.5) lp.setZ(k, lp.getZ(k) * 0.3); }
         gs.push(leaf.applyMatrix4(m));
       }
       gs.push(new THREE.CylinderGeometry(0.045, 0.045, 0.22, 5, 1, true).rotateZ(0.5).translate(0.06, 1.0, 0));
       return mergeGeometries(gs.map((g) => prepGeo(g, new THREE.Matrix4())));
     })();
-    const corn = [];
+    const corn: XZ[] = [];
     for (let gx = 0; gx < GW; gx++) for (let gz = 0; gz < GH; gz++) {
-      if (!maze[gx][gz]) continue;
-      for (const [ox, oz] of [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]]) corn.push([MZ.x0 + (gx + ox) * MZ.u + r.rr(-0.08, 0.08), MZ.z0 + (gz + oz) * MZ.u + r.rr(-0.08, 0.08)]);
+      if (!wallCell(gx, gz)) continue;
+      for (const [ox, oz] of [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]] satisfies XZ[]) corn.push([MZ.x0 + (gx + ox) * MZ.u + r.rr(-0.08, 0.08), MZ.z0 + (gz + oz) * MZ.u + r.rr(-0.08, 0.08)]);
     }
     instanced(cornGeo, M(0xffffff, { side: THREE.DoubleSide }), corn, ([x, z], d) => { d.position.set(x, 0, z); d.rotation.y = r.rand() * PI * 2; d.scale.set(1, r.rr(0.85, 1.15), 1); return r.pick([0xc9b77a, 0xbfae70, 0xb2ad6c, 0xd2c286]); }, true, root);
   }
@@ -393,10 +408,12 @@ export function createWorld(K) {
     instanced(new THREE.BoxGeometry(1, 0.5, 0.62).translate(0, 0.25, 0), M(0xffffff), BALES, ([x, z, lvl, ry], d) => {
       d.position.set(x, lvl * 0.5, z); d.rotation.y = ry + r.rr(-0.06, 0.06); return r.pick([0xd8bc72, 0xd2b569, 0xddc37c]);
     }, true, root);
-    const posts = [], rails = [];
-    const fence = (pts) => {
+    const posts: XZ[] = [], rails: N5[] = [];
+    const fence = (pts: XZ[]) => {
       for (let i = 0; i < pts.length - 1; i++) {
-        const [ax, az] = pts[i], [bx, bz] = pts[i + 1], L = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.round(L / 1.2));
+        const p0 = pts[i], p1 = pts[i + 1];
+        if (!p0 || !p1) continue;
+        const [ax, az] = p0, [bx, bz] = p1, L = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.round(L / 1.2));
         for (let k = 0; k <= n; k++) posts.push([ax + (bx - ax) * k / n, az + (bz - az) * k / n]);
         for (let k = 0; k < n; k++) for (const y of [0.35, 0.72]) rails.push([ax + (bx - ax) * (k + 0.5) / n, y, az + (bz - az) * (k + 0.5) / n, L / n, Math.atan2(bz - az, bx - ax)]);
       }
@@ -427,9 +444,9 @@ export function createWorld(K) {
   }
   {
     const r = rng(600);
-    const cypress = (x, y, z, s = 1) => {
+    const cypress = (x: number, y: number, z: number, s = 1) => {
       part(CYL, C(0x6b5a4a), [x + 0.15 * s, y + 0.9 * s, z], [0.14 * s, 1.8 * s, 0.14 * s], [0, 0, 0.22], statics);
-      for (const [dx, dy, sx, sy, sz] of [[-0.1, 1.5, 1.3, 0.5, 0.95], [-0.5, 2.0, 1.1, 0.45, 0.85], [0.2, 2.3, 0.9, 0.42, 0.7], [-0.9, 1.7, 0.7, 0.38, 0.6]]) {
+      for (const [dx, dy, sx, sy, sz] of [[-0.1, 1.5, 1.3, 0.5, 0.95], [-0.5, 2.0, 1.1, 0.45, 0.85], [0.2, 2.3, 0.9, 0.42, 0.7], [-0.9, 1.7, 0.7, 0.38, 0.6]] satisfies N5[]) {
         part(ICO0, C(r.pick([0x5f7a5c, 0x6e8a69, 0x587254])), [x + dx * s, y + dy * s, z + r.rr(-0.2, 0.2)], [sx * s, sy * s, sz * s], [0, r.rand() * 3, 0], statics);
       }
     };
@@ -465,9 +482,9 @@ export function createWorld(K) {
     for (let i = 0; i < 18; i++) { const x = r.rr(8.8, 10.4); part(ICO0, C(r.pick([0xb8b1a3, 0x9e988c, 0xcfc6b4])), [x, heightAt(x, 0), r.rr(-10, 19)], [r.rr(0.06, 0.14), r.rr(0.05, 0.09), r.rr(0.06, 0.14)], [0, r.rand() * 3, 0], statics); }
     // ruts in the sand: the beach road's two lanes north into the fog, the beach lot's spur, and into each of its spaces
     const rut = C(0xc4b088), tilt = Math.atan(1.23 / 3), D = ROAD.sand, SPX = D.at + D.turn;
-    const rutZ = (x, z0, z1) => part(BOX, rut, [x, heightAt(x, 0) + 0.012, (z0 + z1) / 2], [0.16, 0.02, Math.abs(z1 - z0)], [0, 0, -tilt], statics);
+    const rutZ = (x: number, z0: number, z1: number) => part(BOX, rut, [x, heightAt(x, 0) + 0.012, (z0 + z1) / 2], [0.16, 0.02, Math.abs(z1 - z0)], [0, 0, -tilt], statics);
     for (const [z0, e, r] of BENDS) for (const dx of [-0.32, 0.32]) rutZ(e + r + dx, z0 - r, -20.2);
-    for (const dx of [-0.32, 0.32]) rutZ(SPX + dx, ROAD.z + D.turn, D.spots.at(-1) + D.bay + 0.6);
+    for (const dx of [-0.32, 0.32]) rutZ(SPX + dx, ROAD.z + D.turn, (D.spots.at(-1) ?? 0) + D.bay + 0.6);
     for (const z of D.spots) for (const dz of [-0.32, 0.32]) {
       const x0 = SPX + D.bay, x1 = D.x + 0.5, xm = (x0 + x1) / 2;
       part(BOX, rut, [xm, heightAt(xm, 0) + 0.012, z + dz], [(x1 - x0) / Math.cos(tilt), 0.02, 0.16], [0, 0, -tilt], statics);
@@ -479,7 +496,7 @@ export function createWorld(K) {
   const faceGeo = (() => {
     const eye = new THREE.CircleGeometry(0.2, 3);
     const s = new THREE.Shape(); s.moveTo(-0.42, 0.05);
-    [[-0.28, -0.08], [-0.18, 0.02], [-0.06, -0.1], [0.06, 0.0], [0.18, -0.1], [0.28, 0.02], [0.42, 0.05], [0.25, -0.28], [-0.25, -0.28]].forEach(([x, y]) => s.lineTo(x, y));
+    ([[-0.28, -0.08], [-0.18, 0.02], [-0.06, -0.1], [0.06, 0.0], [0.18, -0.1], [0.28, 0.02], [0.42, 0.05], [0.25, -0.28], [-0.25, -0.28]] satisfies XZ[]).forEach(([x, y]) => s.lineTo(x, y));
     const gs = [eye.clone().rotateZ(PI / 2).translate(-0.27, 0.28, 0), eye.clone().rotateZ(PI / 2).translate(0.27, 0.28, 0), new THREE.CircleGeometry(0.09, 3).rotateZ(PI / 2).translate(0, 0.08, 0), new THREE.ShapeGeometry(s).translate(0, -0.1, 0)];
     return mergeGeometries(gs.map((g) => prepGeo(g, new THREE.Matrix4())));
   })();
@@ -498,10 +515,12 @@ export function createWorld(K) {
     part(new THREE.ConeGeometry(0.2, 0.16, 4), C(0x3e3b38), [x, 1.94, z], [1, 1, 1], [0, PI / 4, 0], statics);
     glow(x, 1.72, z, 1.6, 0.9);
   }
-  const bulbs = [], wire = [];
-  const strand = (pts, sag, per) => {
+  const bulbs: THREE.Vector3[] = [], wire: number[] = [];
+  const strand = (pts: V3[], sag: number, per: number) => {
     for (let i = 0; i < pts.length - 1; i++) {
-      const a = new THREE.Vector3(...pts[i]), b = new THREE.Vector3(...pts[i + 1]);
+      const p0 = pts[i], p1 = pts[i + 1];
+      if (!p0 || !p1) continue;
+      const a = new THREE.Vector3(...p0), b = new THREE.Vector3(...p1);
       let prev = a.clone();
       for (let k = 1; k <= per; k++) {
         const u = k / per, p = a.clone().lerp(b, u); p.y -= sag * 4 * u * (1 - u);
@@ -512,7 +531,7 @@ export function createWorld(K) {
   };
   POLES.forEach(([x, y, z]) => part(CYL, C(0x6b5a4a), [x, y / 2, z], [0.06, y, 0.06], [0, 0, 0], statics));
   strand(POLES, 0.5, 10);
-  strand([...sailCorners, sailCorners[0]].map(([x, y, z]) => [x, y - 0.08, z]), 0.2, 6);
+  strand([...sailCorners, ...sailCorners.slice(0, 1)].map(([x, y, z]): V3 => [x, y - 0.08, z]), 0.2, 6);
   const bulbMat = M(0xfff3c4, { emissive: 0xffd27a, emissiveIntensity: 0.15 });
   instanced(new THREE.IcosahedronGeometry(0.045, 1), bulbMat, bulbs, (p, d) => { d.position.copy(p); }, false, root);
   {
@@ -520,7 +539,7 @@ export function createWorld(K) {
     const lm = new THREE.LineBasicMaterial({ color: 0x3d3a36 }); lm.onBeforeCompile = fogPatch;
     root.add(new THREE.LineSegments(g, lm));
   }
-  const nightLights = [[-12, 1.3, -6], [-5, 1.8, -6.9], [-14, 1.4, -10.4], [GX, 2.2, GZ + 2.6], [4.3, 1.1, -7.2], [-15.2, 2.8, 19.3]].map(([x, y, z]) => {
+  const nightLights = ([[-12, 1.3, -6], [-5, 1.8, -6.9], [-14, 1.4, -10.4], [GX, 2.2, GZ + 2.6], [4.3, 1.1, -7.2], [-15.2, 2.8, 19.3]] satisfies V3[]).map(([x, y, z]) => {
     const l = new THREE.PointLight(0xffa04a, 0, 9, 1.6); l.position.set(x, y, z); root.add(l); return l;
   });
   const beamMat = new THREE.MeshBasicMaterial({ color: 0xfff1c2, vertexColors: true, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false });
@@ -529,7 +548,7 @@ export function createWorld(K) {
     new THREE.ConeGeometry(1.4, 18, 16, 6, true).translate(0, -9, 0).rotateZ(-PI / 2),
   ]);
   { // fade the beam out along its length
-    const p = beamGeo.attributes.position, c = new Float32Array(p.count * 3);
+    const p = beamGeo.getAttribute('position'), c = new Float32Array(p.count * 3);
     for (let i = 0; i < p.count; i++) { const f = Math.pow(1 - Math.min(1, Math.abs(p.getX(i)) / 18), 1.6); c.set([f, f, f], i * 3); }
     beamGeo.setAttribute('color', new THREE.BufferAttribute(c, 3));
   }
@@ -537,7 +556,7 @@ export function createWorld(K) {
   beam.position.set(LH.x, 7.22, LH.z); beam.visible = false;
   root.add(beam);
   const stars = (() => {
-    const r = rng(800), a = [];
+    const r = rng(800), a: number[] = [];
     for (let i = 0; i < 420; i++) { const th = r.rand() * PI * 2, ph = r.rr(0.05, 1.3), R = 160; a.push(Math.cos(th) * Math.cos(ph) * R, Math.sin(ph) * R, Math.sin(th) * Math.cos(ph) * R); }
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(a, 3));
     return new THREE.Points(g, new THREE.PointsMaterial({ color: 0xdfe6ff, size: 1.6, sizeAttenuation: false, transparent: true, opacity: 0, fog: false, depthWrite: false }));
@@ -547,11 +566,11 @@ export function createWorld(K) {
 
   // ---------------------------------------------------------------- the Q.S.C. Official Scale
   // The readout is a live canvas: weighoff.js paints the digits with world.readout.paint(text).
-  const readout = liveTex(256, 128, (g, w, h, text = '0000', label = 'Q.S.C. OFFICIAL SCALE') => {
+  const readout = liveTex(256, 128, (g, w, h, text: string = '0000', label: string = 'Q.S.C. OFFICIAL SCALE') => {
     g.fillStyle = '#1d2420'; g.fillRect(0, 0, w, h);
     g.fillStyle = '#9fb3a8'; g.font = '700 15px system-ui, sans-serif'; g.textAlign = 'center';
     g.fillText(label, w / 2, 24);
-    g.fillStyle = '#ffb347'; g.font = '700 58px ui-monospace, Menlo, monospace'; g.fillText(String(text), w / 2 - 22, 92);
+    g.fillStyle = '#ffb347'; g.font = '700 58px ui-monospace, Menlo, monospace'; g.fillText(text, w / 2 - 22, 92);
     g.font = '700 24px ui-monospace, Menlo, monospace'; g.fillText('LB', w / 2 + 88, 92);
   });
   readout.paint('0000');
@@ -560,7 +579,7 @@ export function createWorld(K) {
     const WS = PLACES.scale, g = hero('scale', WS.x, 0, WS.z);
     part(BOX, C(0x5d6266), [0, 0.09, 0], [2.7, 0.18, 2.7], [0, 0, 0], g);
     part(BOX, C(0x9aa1a5), [0, 0.2, 0], [2.45, 0.06, 2.45], [0, 0, 0], g);
-    for (const [dx, dz] of [[-1.3, -1.3], [1.3, -1.3], [1.3, 1.3], [-1.3, 1.3]]) part(BOX, C(0xe5c66b), [dx, 0.2, dz], [0.16, 0.1, 0.16], [0, 0, 0], g);
+    for (const [dx, dz] of [[-1.3, -1.3], [1.3, -1.3], [1.3, 1.3], [-1.3, 1.3]] satisfies XZ[]) part(BOX, C(0xe5c66b), [dx, 0.2, dz], [0.16, 0.1, 0.16], [0, 0, 0], g);
     const Rd = new THREE.Group(); Rd.position.set(PLACES.readout.x - WS.x, 0, PLACES.readout.z - WS.z); Rd.rotation.y = -PI / 4; g.add(Rd);
     part(CYL, C(0x4a4f53), [0, 0.95, -0.05], [0.07, 1.9, 0.07], [0, 0, 0], Rd);
     part(BOX, C(0x3a3f43), [0, 1.95, 0], [1.15, 0.64, 0.14], [0, 0, 0], Rd);
@@ -603,8 +622,8 @@ export function createWorld(K) {
     root.add(whale);
   }
   let whaleT = 0;
-  function syncWhale(s, dt) {
-    const on = !!s?.events?.active?.some?.((e) => e?.id === 'whale');
+  function syncWhale(s: State, dt: number) {
+    const on = s.events.active.some((e) => e.id === 'whale');
     if (!on && !whale.visible) return;
     whaleT = on ? whaleT + dt : Math.max(whaleT, 0) + dt * 2;
     // a 7 s roll: surface, spout at 1.6 s, glide, sink; it finishes its dive when the event ends
@@ -615,46 +634,54 @@ export function createWorld(K) {
     const sp = (whaleT - 1.6) % 7;
     if (on && sp >= 0 && sp < 0.5 && Math.floor(sp * 12) !== Math.floor((sp - dt) * 12)) {
       const fwd = 1.5;
-      K.fx?.spout(whale.position.x + Math.sin(whale.rotation.y) * fwd, -0.6, whale.position.z + Math.cos(whale.rotation.y) * fwd);
+      K.fx.spout(whale.position.x + Math.sin(whale.rotation.y) * fwd, -0.6, whale.position.z + Math.cos(whale.rotation.y) * fwd);
     }
   }
 
   root.add(mergeStatic(statics));
 
   // ---------------------------------------------------------------- per-frame
-  let farmName = null, hiveCount = 4, beeOn = 1, glowAmt = 0;
+  let farmName: string|null = null, hiveCount = 4, beeOn = 1, glowAmt = 0;
   // world toys (design §10): the scarecrow's hat spins, the foghorn flashes the lamp, the boat toots
-  const toys = { scarecrow: 0, lighthouse: 0, boat: 0 };
-  function toy(id) {
-    if (id in toys) toys[id] = 1;
-    if (id === 'hives') K.fx?.pop(hx, 1.4, hz, 0xf2c14e, 8);
+  const TOY_IDS = ['scarecrow', 'lighthouse', 'boat'] as const;
+  const toys: Record<(typeof TOY_IDS)[number], number> = { scarecrow: 0, lighthouse: 0, boat: 0 };
+  function toy(id: string) {
+    const t = TOY_IDS.find((k) => k === id);
+    if (t) toys[t] = 1;
+    if (id === 'hives') K.fx.pop(hx, 1.4, hz, 0xf2c14e, 8);
   }
   const v3 = new THREE.Vector3();
-  function sync(s, dt, t) {
-    const name = s?.meta?.farmName || 'Quarter Sun Cove Pumpkins';
+  function sync(s: State, dt: number, t: number) {
+    const name = s.meta.farmName || 'Quarter Sun Cove Pumpkins';
     if (name !== farmName) { farmName = name; standSign.paint(name); }
-    const hives = clamp(s?.patch?.hives ?? 4, 0, 6);
+    const hives = clamp(s.patch.hives, 0, 6);
     if (hives !== hiveCount) { hiveCount = hives; extraHives.forEach((g, i) => (g.visible = hives > 4 + i)); }
     // water
-    const wp = waterGeo.attributes.position.array;
-    for (let i = 0; i < wp.length; i += 3) wp[i + 1] = waterBase[i + 1] + Math.sin(wp[i] * 1.3 + t * 1.2) * 0.05 + Math.sin(wp[i + 2] * 0.9 - t * 0.9 + wp[i] * 0.4) * 0.04;
-    waterGeo.attributes.position.needsUpdate = true;
-    for (const k in toys) toys[k] = Math.max(0, toys[k] - dt / 1.1);
+    const water = waterGeo.getAttribute('position'), wp = water.array;
+    for (let i = 0; i < wp.length; i += 3) {
+      const x = wp[i] ?? 0, z = wp[i + 2] ?? 0;
+      wp[i + 1] = (waterBase[i + 1] ?? 0) + Math.sin(x * 1.3 + t * 1.2) * 0.05 + Math.sin(z * 0.9 - t * 0.9 + x * 0.4) * 0.04;
+    }
+    water.needsUpdate = true;
+    for (const k of TOY_IDS) toys[k] = Math.max(0, toys[k] - dt / 1.1);
     boat.position.y = -0.88 + Math.sin(t * 1.1) * 0.05 + Math.sin(toys.boat * PI) * 0.12;
     boat.rotation.z = Math.sin(t * 0.9) * 0.06 + Math.sin(t * 13) * 0.12 * toys.boat;
     scarecrowHat.rotation.y = toys.scarecrow > 0 ? Math.sqrt(1 - toys.scarecrow) * PI * 4 : 0;
     beam.rotation.y = t * 0.6;
     syncWhale(s, dt);
     // bees fly only when Marlene is thin (f < 0.6, design §5) and never at night
-    const fog = K.sky?.fog ?? 0.35;
+    const fog = K.sky.fog;
     beeOn = lerp(beeOn, fog < 0.6 && glowAmt < 0.6 ? 1 : 0, Math.min(1, dt * 2));
     const bloom = K.bloom?.length ? K.bloom : MEADOW;
     beeData.forEach((b, i) => {
       const show = beeOn > 0.02 && b.hive < hiveCount;
       const c = 0.5 - 0.5 * Math.cos(t * b.commute * PI * 2 + b.p);
       // ease toward the current flower so bees don't jump when a row starts or stops blooming
-      (b.cur ||= bloom[b.bloomIdx % bloom.length].clone()).lerp(bloom[b.bloomIdx % bloom.length], Math.min(1, dt * 0.6));
-      v3.copy(HOMES[b.hive]).lerp(b.cur, c);
+      const target = bloom[b.bloomIdx % bloom.length], home = HOMES[b.hive];
+      if (!target || !home) return;
+      const cur = (b.cur ??= target.clone());
+      cur.lerp(target, Math.min(1, dt * 0.6));
+      v3.copy(home).lerp(cur, c);
       dummy.position.set(v3.x + Math.sin(t * b.a * 3 + b.p) * b.r * 0.5, v3.y + 0.25 * Math.sin(t * b.b * 2 + b.p), v3.z + Math.sin(t * b.b * 3 + b.p) * Math.cos(t * b.a * 3 + b.p) * b.r * 0.5);
       dummy.rotation.set(0, t * b.a * 3 + b.p, 0);
       dummy.scale.setScalar(show ? 1.4 * beeOn : 0);
@@ -662,7 +689,7 @@ export function createWorld(K) {
     });
     bees.instanceMatrix.needsUpdate = true;
     // fog puffs drift around the tile
-    const fp = K.cam?.view === 'stroll' ? 0.6 : 1;
+    const fp = K.cam.view === 'stroll' ? 0.6 : 1;
     puffData.forEach((u, i) => {
       u.a += u.sp * dt * 6;
       puffs.set(i, Math.cos(u.a) * u.r, u.y + Math.sin(t * 0.2 + u.r) * 0.5, Math.sin(u.a) * u.r, u.w, u.w * 0.45, lerp(0.2, 0.95, fog) * fp);
@@ -670,17 +697,17 @@ export function createWorld(K) {
     puffs.commit();
   }
   // Night glow and sky colour, called by sky.js every frame (g: 0 day .. 1 night).
-  function setLight(cur) {
+  function setLight(cur: { glow: number; water: THREE.Color; bg: THREE.Color }) {
     const g = glowAmt = cur.glow;
     waterMat.color.copy(cur.water);
     faceMat.emissiveIntensity = g * 3.2; barnGlow.emissiveIntensity = g * 1.6; glowMat.emissiveIntensity = g * 1.8;
     lanternMat.emissiveIntensity = g * 3; readoutMat.emissiveIntensity = 0.35 + g * 1.2; bulbMat.emissiveIntensity = 0.15 + g * 3.4; lampMat.emissiveIntensity = 0.4 + g * 4 + Math.sin(toys.lighthouse * PI * 3) ** 2 * 5;
-    glowB.mat.uniforms.opacity.value = g * 0.85;
+    glowB.uniforms.opacity.value = g * 0.85;
     glowB.mesh.visible = g > 0.02;
     for (const l of nightLights) l.intensity = g * 7;
     beam.visible = g > 0.05; beamMat.opacity = Math.max(0, g - 0.3) * 0.4;
     stars.material.opacity = Math.max(0, g - 0.4) * 1.4; stars.visible = g > 0.4;
-    puffs.mat.uniforms.color.value.copy(cur.bg);
+    puffs.uniforms.color.value.copy(cur.bg);
   }
 
   return {

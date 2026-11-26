@@ -20,11 +20,15 @@ import { fogPatch } from './fog.js';
 import { PLACES } from '../sim/layout.js';
 import { T } from '../sim/tuning.js';
 import { makeTownsfolk, makeFolk, createCrowd, SPECIES_KEYS } from './folk.js';
+import type { State, OutEvent } from '../sim/types.js';
+import type { Kit } from './types.js';
+import { WeighoffStep,WeighoffStep2 } from '../sim/state.js';
+import { Giant } from '../sim/state.js';
 
 const SC = PLACES.scale, GX = PLACES.giant.x, GZ = PLACES.giant.z;
 const TOP = 0.23, YAW = -PI / 4;                                   // the scale's platform; facing the isometric camera
 const LIFT = { x: -16.4, z: 13.6 };
-const PALLET = (k) => ({ x: -11.0 + k * 2.4, z: 17.0 });
+const PALLET = (k: number) => ({ x: -11.0 + k * 2.4, z: 17.0 });
 const PORCH = { x: -12.3, z: -10.0 };
 const MAYOR = { x: -13.4, z: 14.4 };
 const JUDGES = [{ x: -8.6, z: 19.0 }, { x: -7.2, z: 19.1 }, { x: -5.8, z: 19.0 }];
@@ -44,17 +48,17 @@ const SHOTS = {
   lit: [PORCH.x - 0.1, PORCH.z + 0.5, 4.2],
 };
 const LIT_HOLD = 2.6;                              // s on her lit face before the trick-or-treaters come up the path
-const sizeOf = (est) => clamp(1.2 * Math.sqrt(Math.max(est || 300, 50) / 1400), 0.42, 1.45);
-const smoothK = (x) => x * x * (3 - 2 * x);
+const sizeOf = (est: number) => clamp(1.2 * Math.sqrt(Math.max(est || 300, 50) / 1400), 0.42, 1.45);
+const smoothK = (x: number) => x * x * (3 - 2 * x);
 
-export default function createWeighoffView(K) {
+export default function createWeighoffView(K: Kit) {
   const { scene, hit, fx } = K, r = rng(7700);
   const root = new THREE.Group(); root.name = 'weighoff'; scene.add(root);
   const FG = pumpkinGeo({ ribs: 10, ws: 40, hs: 18, squash: 0.66, groove: 0.07 });
   const STEMG = new THREE.CylinderGeometry(0.16, 0.26, 0.5, 6);
 
   // ---------------------------------------------------------------- your entries (and the porch giant on Halloween)
-  const surf = (k, n, sx, sy, parent) => {
+  const surf = (k: number, n: number, sx: number, sy: number, parent: THREE.Group<THREE.Object3DEventMap>) => {
     const im = new THREE.InstancedMesh(ICO0, M(k), n);
     for (let i = 0; i < n; i++) {
       const a = r.rr(-1.0, 1.0) + (i % 2 ? 0.5 : -0.3), y = r.rr(0.3, 0.85), rad = Math.sqrt(Math.max(0, 1 - ((y - 0.56) / 0.66) ** 2)) * 0.98;
@@ -64,7 +68,7 @@ export default function createWeighoffView(K) {
     im.count = 0; im.castShadow = false; parent.add(im);
     return im;
   };
-  function makeFruit(mat) {
+  function makeFruit(mat?: THREE.MeshStandardMaterial|undefined) {
     const g = new THREE.Group(); g.visible = false; root.add(g);
     const tilt = new THREE.Group(); g.add(tilt);
     const body = new THREE.Group(); tilt.add(body);
@@ -76,7 +80,7 @@ export default function createWeighoffView(K) {
     return { g, tilt, body, mat, shell, stache, scars: surf(0x5b3d26, 10, 0.1, 0.022, body), x: 0, z: 0, y: 0, size: 0, shake: 0, hop: 0, place: null };
   }
   const mine = [makeFruit(), makeFruit()];
-  function dressFruit(F, p, est) {
+  function dressFruit(F: { g?: THREE.Group<THREE.Object3DEventMap>; tilt?: THREE.Group<THREE.Object3DEventMap>; body: any; mat: any; shell?: THREE.Mesh<THREE.BufferGeometry<THREE.NormalBufferAttributes>,THREE.MeshStandardMaterial,THREE.Object3DEventMap>; stache: any; scars: any; x?: number; z?: number; y?: number; size: any; shake?: number; hop?: number; place?: null; }, p: Giant|null, est: number|null) {
     if (!p) return;
     const [sxz, sy] = SHAPES[p.shape] || SHAPES.round, s = sizeOf(est);
     F.size = F.size ? lerp(F.size, s, 0.2) : s;
@@ -118,13 +122,13 @@ export default function createWeighoffView(K) {
   const posts = pool(new THREE.BoxGeometry(0.07, 1.0, 0.07).translate(0, 0.5, 0), C(0x7d6a58), 9, true, root);
   const atlas = canvasTex(512, 256, () => {});
   const placardMat = M(0xffffff, { map: atlas, flatShading: false });
-  let placards = null, field = '', gag = null, gagYear = 0;
+  let placards: THREE.Object3D<THREE.Object3DEventMap>|null = null, field = '', gag: THREE.Object3D<THREE.Object3DEventMap>|null = null, gagYear = 0;
   const growers = new Map();
   const rivalPos = new Map();
-  function paintAtlas(entries) {
+  function paintAtlas(entries: any[]) {
     const g = atlas.image.getContext('2d');
     g.clearRect(0, 0, 512, 256);
-    entries.forEach((e, i) => {
+    entries.forEach((e: { you: any; grower: string; name: any; gag: any; est: any; }, i: number) => {
       const x = (i % 4) * 128, y = Math.floor(i / 4) * 85;
       g.fillStyle = e.you ? '#d9782d' : '#f4efe4'; g.fillRect(x + 2, y + 2, 124, 81);
       g.strokeStyle = '#3f4c43'; g.lineWidth = 4; g.strokeRect(x + 4, y + 4, 120, 77);
@@ -135,10 +139,10 @@ export default function createWeighoffView(K) {
     });
     atlas.needsUpdate = true;
   }
-  function buildPlacards(entries) {
+  function buildPlacards(entries: any[]) {
     placards?.geometry.dispose(); if (placards) root.remove(placards);
-    const geos = [], m4 = new THREE.Matrix4(), q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.25, YAW, 0, 'YXZ'));
-    entries.forEach((e, i) => {
+    const geos: any[] = [], m4 = new THREE.Matrix4(), q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.25, YAW, 0, 'YXZ'));
+    entries.forEach((e: { pallet: any; }, i: number) => {
       const p = PALLET(e.pallet), plane = new THREE.PlaneGeometry(1.25, 0.83), uv = plane.attributes.uv;
       const u0 = (i % 4) / 4, v1 = 1 - Math.floor(i / 4) * 85 / 256, v0 = v1 - 83 / 256;
       for (let k = 0; k < uv.count; k++) uv.setXY(k, u0 + uv.getX(k) * 0.25 - 0.002 * (uv.getX(k) - 0.5), v0 + uv.getY(k) * (v1 - v0));
@@ -149,7 +153,7 @@ export default function createWeighoffView(K) {
     geos.forEach((g) => g.dispose());
   }
   // the raccoons' disguise of the year (a tarp, a beach ball, a trench coat, a hollow pumpkin; from year 5, the real thing)
-  function buildGag(y) {
+  function buildGag(y: number) {
     if (gag) { root.remove(gag); disposeTree(gag); }
     gag = new THREE.Group(); root.add(gag);
     if (y === 1) {
@@ -172,7 +176,7 @@ export default function createWeighoffView(K) {
     mergeLocal(gag);
     gagYear = y;
   }
-  function grower(id) {
+  function grower(id: string) {
     if (!growers.has(id)) {
       const rig = id === 'raccoons' ? makeFolk('raccoon', { kid: true }) : makeTownsfolk(GROWER[id] || 'possum');
       root.add(rig.root); growers.set(id, rig);
@@ -182,8 +186,8 @@ export default function createWeighoffView(K) {
 
   // ---------------------------------------------------------------- townsfolk on duty: the Mayor, the judges, the crowd
   const folks = new Map();
-  const townie = (key) => { if (!folks.has(key)) { const f = makeTownsfolk(key); root.add(f.root); folks.set(key, f); } return folks.get(key); };
-  let crowd = null, crowdSpecies = [], crowdN = 0, crowdYear = 0;
+  const townie = (key: string) => { if (!folks.has(key)) { const f = makeTownsfolk(key); root.add(f.root); folks.set(key, f); } return folks.get(key); };
+  let crowd: { group: any; begin: any; put: any; end: any; dispose: any; meshes?: {}; }|null = null, crowdSpecies: any[] = [], crowdN = 0, crowdYear = 0;
   const hop = { t: 0 };
 
   // ---------------------------------------------------------------- the lift: the ring, the forklift
@@ -213,19 +217,19 @@ export default function createWeighoffView(K) {
   const flash = billboards(2, { map: glowTex(), blending: THREE.AdditiveBlending, toneMapped: false });
   flash.mesh.visible = false; root.add(flash.mesh);
   const eyeOn = new Map();             // k -> { x, y, z, t, caught }
-  let flashT = 9, flashAt = null, glint = -1;
+  let flashT = 9, flashAt: { x: number; y: number; z: number; }|null = null, glint = -1;
   const kit = makeFolk('raccoon', { kid: true }); kit.root.visible = false; root.add(kit.root);
   const scamper = { t: 9, x: 0, z: 0, dx: 0, dz: 0 };
   const prints = pool(new THREE.CircleGeometry(0.07, 6).rotateX(-PI / 2), M(0x4a3a2c), 34, false, root);
-  const printsAt = [];
+  const printsAt: number[][] = [];
   { const pr = rng(7800); let x = -11.4, z = 11.6; for (let i = 0; i < 34; i++) { const tx = i < 17 ? GX + 1.6 : LIFT.x + 1.6, tz = i < 17 ? GZ + 1.0 : LIFT.z - 0.6; x = lerp(x, tx, 0.14) + pr.rr(-0.2, 0.2); z = lerp(z, tz, 0.14) + (i % 2 ? 0.12 : -0.12); printsAt.push([x, z, pr.rand() * PI]); } }
   let printsShown = false;
 
   // ---------------------------------------------------------------- Halloween: trick-or-treaters in sheets
   const GHOST_TYPES = ['raccoon', 'possum', 'owl'];
   const GHOST_SCALE = 1.3;                          // kids in sheets, a little larger than life so they read on a phone
-  const ghostGeo = (type) => {
-    const geos = [], m = new THREE.Matrix4(), cl = (h) => new THREE.Color(h);
+  const ghostGeo = (type: string) => {
+    const geos = [], m = new THREE.Matrix4(), cl = (h: number[]|THREE.ColorRepresentation|THREE.IcosahedronGeometry|THREE.ConeGeometry|undefined) => new THREE.Color(h);
     const pts = Array.from({ length: 12 }, (_, i) => { const k = i / 11; return new THREE.Vector2(0.36 * Math.sqrt(Math.max(1e-4, 1 - k ** 2.4)) + 0.02 * Math.sin(k * 9) * (1 - k), 0.95 * k); });
     const sheet = new THREE.LatheGeometry(pts, 12);
     geos.push(prepGeo(sheet, m.identity(), cl(0xf3efe6)));
@@ -246,7 +250,7 @@ export default function createWeighoffView(K) {
 
   // ---------------------------------------------------------------- per-frame state
   const lifted = new Set();
-  let lastKey = '', stepT = 0, lift = { p: 0, want: 0, hop: 0, shake: 0, auto: false }, revealFx = null, inspectT = -1, year = 0;
+  let lastKey = '', stepT = 0, lift = { p: 0, want: 0, hop: 0, shake: 0, auto: false }, revealFx: null = null, inspectT = -1, year = 0;
   const readoutLabel = 'Q.S.C. OFFICIAL SCALE';
 
   function hideAll() {
@@ -265,14 +269,14 @@ export default function createWeighoffView(K) {
   }
   hideAll();
 
-  function shot(k, ms = 900) {
+  function shot(k: string|null, ms = 900) {
     const S = SHOTS[k];
     if (!S || !K.cam?.glide) return;
     K.cam.glide(S[0], S[1], K.cam.zoomFor(S[2]), ms);
   }
 
   // ---------------------------------------------------------------- the weigh-off
-  function syncWeighoff(s, dt, t) {
+  function syncWeighoff(s: State, dt: number, t: number) {
     const wo = s.weighoff, st = wo.steps?.[wo.i], k = st?.k, key = `${wo.year}|${wo.i}`;
     if (!st) return;
     if (key !== lastKey) {
@@ -356,7 +360,7 @@ export default function createWeighoffView(K) {
     // the judges hold up their cards for the Prettiest
     const judges = st.judges || (k === 'pretty' ? wo.pretty?.judges : null) || [];
     for (const [key, f] of folks) if (key !== 'mayor' && !(k === 'pretty' && judges.includes(key))) f.root.visible = false;
-    if (k === 'pretty') judges.forEach((j, i) => {
+    if (k === 'pretty') judges.forEach((j: any, i: number) => {
       const f = townie(j);
       f.root.visible = true; f.root.position.set(JUDGES[i].x, 0, JUDGES[i].z); f.root.rotation.y = YAW;
       f.animate(dt, 0, { cheer: stepT > 1 + i * 0.7 && stepT < 2.2 + i * 0.7 });
@@ -376,11 +380,11 @@ export default function createWeighoffView(K) {
     // the reveal's weather: the fog thickens for the card read, then breaks to golden light or rolls in
     if (revealFx && k !== 'weigh') { K.sky.override(null); K.sky.setFogOverride(0); revealFx = null; }
   }
-  function liftPos(st) {
+  function liftPos(st: Record<string,string|number|boolean|(string|WeighoffStep)[]|WeighoffStep2|null>) {
     const p = smoothK(clamp(lift.p, 0, 1));
     return { x: lerp(LIFT.x, SC.x, p), z: lerp(LIFT.z, SC.z, p), y: lerp(0, TOP, p) + lift.hop * 0.7, hop: 0 };
   }
-  function syncLift(s, st, k, dt) {
+  function syncLift(s: State, st: Record<string,string|number|boolean|(string|WeighoffStep)[]|WeighoffStep2|null>, k: string|number|boolean|(string|WeighoffStep)[]|WeighoffStep2|null|undefined, dt: number) {
     const active = k === 'lift';
     lift.want = active ? (st.done ? 1 : lift.want) : 0;
     if (active && st.auto) lift.want = Math.min(1, stepT / 2.4);
@@ -398,7 +402,7 @@ export default function createWeighoffView(K) {
     if (st.done && active) lifted.add(st.id);
     if (k === 'inspect' || k === 'pretty' || k === 'weigh' || k === 'results') for (const x of s.weighoff.entries) if (x.you) lifted.add(x.id);
   }
-  function syncCrowd(s, st, k, dt, t) {
+  function syncCrowd(s: State, st: Record<string,string|number|boolean|(string|WeighoffStep)[]|WeighoffStep2|null>, k: string|number|boolean|(string|WeighoffStep)[]|WeighoffStep2|null|undefined, dt: number, t: number) {
     const show = ['dawn', 'arrive', 'welcome', 'lift', 'inspect', 'pretty', 'weigh', 'results'].includes(k);
     if (!show) { if (crowd) crowd.group.visible = false; return; }
     if (!crowd) crowd = createCrowd(K, { adults: 16, kids: 10 });
@@ -434,7 +438,7 @@ export default function createWeighoffView(K) {
     }
     crowd.end();
   }
-  function syncInspect(s, st, k, dt, t) {
+  function syncInspect(s: State, st: Record<string,string|number|boolean|(string|WeighoffStep)[]|WeighoffStep2|null>, k: string|number|boolean|(string|WeighoffStep)[]|WeighoffStep2|null|undefined, dt: number, t: number) {
     const on = k === 'inspect';
     if (!wm) return;
     if (!on) {
@@ -463,7 +467,7 @@ export default function createWeighoffView(K) {
     const up = st.brow === 'up' ? 0.14 : st.brow === 'slight' ? 0.06 : 0;
     if (brow && inspectT > T1) { brow.position.y = lerp(brow.position.y, 0.3 + up, damp(dt, 8)); brow2.position.y = lerp(brow2.position.y, 0.3 + up * 0.4, damp(dt, 8)); }
   }
-  function syncNight(s, st, k, dt, t) {
+  function syncNight(s: State, st: Record<string,string|number|boolean|(string|WeighoffStep)[]|WeighoffStep2|null>, k: string|number|boolean|(string|WeighoffStep)[]|WeighoffStep2|null|undefined, dt: number, t: any) {
     const night = k === 'eve' || k === 'watch';
     eyes.mesh.visible = night && eyeOn.size > 0;
     let i = 0;
@@ -494,7 +498,7 @@ export default function createWeighoffView(K) {
       if (glint > 3) glint = -1;
     }
   }
-  function onStep(s, st, k, fresh) {
+  function onStep(s: State, st: Record<string,string|number|boolean|(string|WeighoffStep)[]|WeighoffStep2|null>, k: string|number|boolean|(string|WeighoffStep)[]|WeighoffStep2|null|undefined, fresh: boolean) {
     stepT = 0;
     if (k !== 'lift') { lift.want = 0; lift.p = k === 'inspect' ? 1 : 0; }
     if (k === 'lift') { lift.p = 0; lift.want = 0; }
@@ -514,7 +518,7 @@ export default function createWeighoffView(K) {
   }
 
   // ---------------------------------------------------------------- Halloween
-  function syncHalloween(s, dt, t) {
+  function syncHalloween(s: State, dt: number, t: number) {
     const w = s.winter || {}, p = w.plot === 2 ? s.giant?.plot2 : s.giant, has = !!p && p.setDay != null;
     const key = `hw|${s.clock.year}|${w.stage}`;
     if (key !== lastKey) {
@@ -563,9 +567,9 @@ export default function createWeighoffView(K) {
   }
 
   // ---------------------------------------------------------------- frame
-  let lastState = null;
+  let lastState: State|null = null;
   const reset = () => { hideAll(); lastKey = ''; field = ''; if (revealFx) { K.sky.override(null); K.sky.setFogOverride(0); revealFx = null; } };
-  function sync(s, dt, t) {
+  function sync(s: State, dt: any, t: any) {
     // a different game (Continue from the title, which drew the same save as its backdrop; a new farm): start over,
     // so the camera frames the step again and nothing of the old one lingers
     if (s !== lastState) { lastState = s; if (lastKey) reset(); }
@@ -585,7 +589,7 @@ export default function createWeighoffView(K) {
     }
   }
 
-  function fxEvent(ev) {
+  function fxEvent(ev: OutEvent) {
     switch (ev.type) {
       case 'weighoff/beat':
         lift.want = Math.min(1, (ev.k + 1) / Math.max(1, ev.n));
@@ -647,7 +651,7 @@ export default function createWeighoffView(K) {
   };
 }
 // "est. 1,0??" on a placard: hundreds shown, the last two digits are always ?? (the hidden-weight motif)
-function estShort(est) {
+function estShort(est: number) {
   const h = String(Math.floor(est / 100));
   return `est. ${h.length > 1 ? h.slice(0, -1) + ',' + h.slice(-1) : h}??`;
 }

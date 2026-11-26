@@ -17,7 +17,9 @@ import { PLACES } from '../sim/layout.js';
 import { SAIL, sailY } from './world.js';
 import { estText } from '../sim/giant.js';
 import { T } from '../sim/tuning.js';
-
+import type { State, OutEvent } from '../sim/types.js';
+import type { Kit } from './types.js';
+import { Giant } from '../sim/state.js';
 const GX = PLACES.giant.x, GZ = PLACES.giant.z;
 const P2 = { x: GX - 1.6, z: GZ + 1.6 }, P1 = { x: GX + 1.4, z: GZ - 1.2 };   // two plots (year 3) share the corner
 const COLORS = { O: 0xe39a52, S: 0xe8a77a, T: 0xd8b07c, W: 0xebe4d2 };
@@ -25,12 +27,12 @@ const GREEN = new THREE.Color(0x7d9550);
 const SHAPES = { tall: [0.9, 1.2], round: [1, 1], flat: [1.1, 0.78] };
 const LEGEND = { stage: 'fruit', name: 'Big Earl', est: 1450, wc: 1450, shade: true, color: 'O', shape: 'round', setDay: -60, m: 0.6 };
 // sqrt rather than the physical cube root: she should visibly grow from day to day (1,400 lb = the prototype's BIG EARL)
-const sizeOf = (W) => clamp(2.4 * Math.sqrt(Math.max(W, 3) / 1400), 0.12, 3.1);
+const sizeOf = (W: number) => clamp(2.4 * Math.sqrt(Math.max(W, 3) / 1400), 0.12, 3.1);
 const PRE = new Set(['tin', 'started', 'sprout']);
 const SEEDLING_LEAVES = T.firsts.seedling.leaves, SIGN_PAINT = T.firsts.signPaintS;   // [D]
 
 // one fruit: a pivot (position), wob (tap squash), body (eased size) and her decals
-function makeFruit(root, geo, x, z, r) {
+function makeFruit(root: THREE.Group<THREE.Object3DEventMap>, geo: THREE.BufferGeometry<THREE.NormalBufferAttributes>, x: number, z: number, r: { rand: any; rr: any; pick?: (arr: any) => any; }) {
   const pos = new THREE.Group(); pos.position.set(x, 0, z); pos.rotation.set(0, 0.4, 0.04); root.add(pos);
   const wob = new THREE.Group(); pos.add(wob);
   const body = new THREE.Group(); wob.add(body);
@@ -42,7 +44,7 @@ function makeFruit(root, geo, x, z, r) {
   for (let i = 0; i < 10; i++) { const a = (i / 10) * PI * 2; part(new THREE.SphereGeometry(1, 6, 10, a - 0.06, 0.12, 0.15, 2.6), stripeMat, [0, 0.66 * 0.85, 0], [1.01, 0.66 * 0.97, 1.01], [0, 0, 0], stripes); }
   mergeLocal(stripes); stripes.children.forEach((m) => (m.castShadow = false)); stripes.visible = false;
   // marks on the skin: dark ones (cracks, scratches, a scuff) and pale ones (sunscald)
-  const surface = (k, n, sx, sy) => {
+  const surface = (k: number, n: number, sx: number, sy: number) => {
     const im = new THREE.InstancedMesh(ICO0, M(k), n);
     for (let i = 0; i < n; i++) {
       const a = r.rr(-1.1, 1.1) + (i % 2 ? PI * 0.35 : 0), y = r.rr(0.35, 0.85), rad = Math.sqrt(Math.max(0, 1 - ((y - 0.56) / 0.66) ** 2)) * 0.98;
@@ -62,18 +64,18 @@ function makeFruit(root, geo, x, z, r) {
   {
     const probe = new THREE.Mesh(geo); probe.scale.set(1, 1, 0.917); probe.updateMatrixWorld(true);
     const ray = new THREE.Raycaster(), o = new THREE.Vector3(), dir = new THREE.Vector3();
-    const onSkin = (a, y) => {           // a: angle around her (0 faces +z), y: height in body space
+    const onSkin = (a: number|undefined, y: number|undefined) => {           // a: angle around her (0 faces +z), y: height in body space
       o.set(Math.sin(a) * 3, y, Math.cos(a) * 3); dir.set(-o.x, 0, -o.z).normalize();
       ray.set(o, dir);
       const h = ray.intersectObject(probe)[0];
       return h ? { p: h.point.clone(), n: h.face.normal.clone().divide(probe.scale).normalize() } : null;
     };
     // the zigzag in (angle, height), then a midpoint between each pair so every piece hugs the curve
-    const zig = []; { let a = -0.9, y = 0.78; for (let i = 0; i <= 7; i++) { zig.push([a, y]); a += 0.095; y -= r.rr(0.03, 0.09) * (i % 2 ? -1 : 1); } }
-    const pts = [];
+    const zig: (string|number)[][] = []; { let a = -0.9, y = 0.78; for (let i = 0; i <= 7; i++) { zig.push([a, y]); a += 0.095; y -= r.rr(0.03, 0.09) * (i % 2 ? -1 : 1); } }
+    const pts: any[] = [];
     zig.forEach(([a, y], i) => { if (i) pts.push(onSkin((a + zig[i - 1][0]) / 2, (y + zig[i - 1][1]) / 2)); pts.push(onSkin(a, y)); });
     const m = new THREE.Matrix4(), tg = new THREE.Vector3(), bn = new THREE.Vector3(), nm = new THREE.Vector3(), eu = new THREE.Euler();
-    const lay = (A, B, mat, size, into) => {
+    const lay = (A: { p: THREE.Vector3Like; n: THREE.Vector3Like; }, B: { p: THREE.Vector3Like; n: THREE.Vector3Like; }, mat: THREE.MeshStandardMaterial, size: (number|null)[], into: THREE.Group<THREE.Object3DEventMap>) => {
       tg.subVectors(B.p, A.p); const len = tg.length(); tg.divideScalar(len || 1);
       nm.addVectors(A.n, B.n).normalize(); bn.crossVectors(nm, tg).normalize(); nm.crossVectors(tg, bn);
       m.makeBasis(tg, bn, nm); eu.setFromRotationMatrix(m);
@@ -90,7 +92,7 @@ function makeFruit(root, geo, x, z, r) {
   return { pos, wob, body, mat, shell, stripes, scars, scald, crack, crackMat, stitches, gash, stache, twin, size: null, col: new THREE.Color(COLORS.O), swell: 0, shudder: 0 };
 }
 
-export default function createGiantView(K) {
+export default function createGiantView(K: Kit) {
   const { scene } = K, r = rng(6100);
   const root = new THREE.Group(); root.name = 'giant'; scene.add(root);
   const gy = K.world?.heightAt?.(GX, GZ) ?? 0;
@@ -176,7 +178,7 @@ export default function createGiantView(K) {
   const furl = part(CYL8, C(0xe2dac6), [SAIL.x - SAIL.h + 0.12, sailY(0, 0.5) - 0.05, SAIL.z], [0.12, SAIL.h * 2, 0.12], [PI / 2, 0, 0], root);
   // ---- the sign: post + live canvas
   // [D] k < 1: her name is being painted on, left to right with the brush at its edge (MEET {NAME}); the "est." comes last
-  const sign = liveTex(256, 160, (g, w, h, name, est, k = 1) => {
+  const sign = liveTex(256, 160, (g: { fillStyle: string; fillRect: (arg0: number,arg1: number,arg2: any,arg3: any) => void; strokeStyle: string; lineWidth: number; strokeRect: (arg0: number,arg1: number,arg2: number,arg3: number) => void; textAlign: string; font: string; measureText: (arg0: any) => { (): any; new(): any; width: number; }; fillText: (arg0: any,arg1: number,arg2: number) => void; save: () => void; beginPath: () => void; rect: (arg0: number,arg1: number,arg2: number,arg3: any) => void; clip: () => void; restore: () => void; arc: (arg0: number,arg1: number,arg2: number,arg3: number,arg4: number) => void; fill: () => void; globalAlpha: number; }, w: number, h: number, name: any, est: any, k = 1) => {
     g.fillStyle = '#3f4c43'; g.fillRect(0, 0, w, h);
     g.strokeStyle = '#b9a98c'; g.lineWidth = 10; g.strokeRect(5, 5, w - 10, h - 10);
     g.fillStyle = '#f3efe4'; g.textAlign = 'center';
@@ -217,8 +219,8 @@ export default function createGiantView(K) {
   let beesShown = -1;
 
   let measureT = 1, lastLeaf = '', notesT = 0;
-  const lerpSize = (F, want, dt) => { F.size = F.size == null ? want : lerp(F.size, want, damp(dt, 2.2)); };
-  function fruitSync(F, p, dt, t, s, show) {
+  const lerpSize = (F: { size: number|null; }, want: number, dt: any) => { F.size = F.size == null ? want : lerp(F.size, want, damp(dt, 2.2)); };
+  function fruitSync(F: { pos: any; wob?: THREE.Group<THREE.Object3DEventMap>; body: any; mat: any; shell?: THREE.Mesh<any,any,THREE.Object3DEventMap>; stripes: any; scars: any; scald: any; crack: any; crackMat: any; stitches: any; gash: any; stache: any; twin: any; size: any; col: any; swell: any; shudder: any; }, p: { stage: string; name: string; est: number; wc: number; shade: boolean; color: string; shape: string; setDay: number; m: number; }|Giant, dt: number, t: number, s: State, show: boolean) {
     F.pos.visible = show;
     if (!show) { F.size = null; return; }
     const day = s?.clock?.dayFrac ?? 0, live = p.split === 'blowout' ? 0 : (p.gain || 0) * day;
@@ -249,7 +251,7 @@ export default function createGiantView(K) {
     F.shudder = Math.max(0, F.shudder - dt);
   }
 
-  function sync(s, dt, t) {
+  function sync(s: State, dt: number, t: number) {
     const legend = s === undefined || s?.giant === undefined || s?.clock?.phase === 'newgame';
     const g = legend ? LEGEND : s.giant;
     if (!g) { root.visible = false; return; }
@@ -343,7 +345,7 @@ export default function createGiantView(K) {
     syncDawnBees(s, stage, t, legend);
   }
   // ---- [C] Moving Day and the tin: the hoop rises, she droops while she sulks and perks up when she roots
-  function movingSync(g, stage, d, dt, t, legend) {
+  function movingSync(g: { stage: string; name: string; est: number; wc: number; shade: boolean; color: string; shape: string; setDay: number; m: number; }|Giant, stage: string, d: number, dt: number, t: number, legend: boolean) {
     if (stage === 'tin') {                         // the lid slides off on the first tap and stays off
       const k = MV.tin >= 1 ? 1 : 0;
       lid.position.set(lerp(0, 0.24, k), lerp(0.56, 0.44, k), 0); lid.rotation.z = -0.5 * k;
@@ -361,8 +363,8 @@ export default function createGiantView(K) {
     sprout.rotation.x = -0.2 * MV.droop;
     if (sprout.visible) sprout.scale.multiplyScalar((1 + perk) * (1 - 0.12 * MV.droop));
   }
-  const easeOut = (k) => 1 - (1 - k) ** 3;
-  function syncDawnBees(s, stage, t, legend) {
+  const easeOut = (k: number) => 1 - (1 - k) ** 3;
+  function syncDawnBees(s: State, stage: string, t: number, legend: boolean) {
     const card = !legend && stage === 'flower' && s?.story?.cards?.[0]?.kind === 'pollinate' ? s.story.cards[0] : null;
     const n = card ? clamp(card.data?.bees | 0, 0, BEES) : 0;
     bees.visible = n > 0;
@@ -378,7 +380,7 @@ export default function createGiantView(K) {
     }
     bees.instanceMatrix.needsUpdate = true;
   }
-  function fx(ev) {
+  function fx(ev: OutEvent) {
     if (ev.type === 'giant/measure') { measureT = 0; }
     if (ev.type === 'giant/creak' || ev.type === 'giant/split') (ev.plot === 2 ? F2 : F1).shudder = ev.type === 'giant/split' ? 1.4 : 1;
     if (ev.type === 'giant/grow' && ev.gain >= 4) (ev.plot === 2 ? F2 : F1).swell = 1;

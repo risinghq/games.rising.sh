@@ -14,19 +14,22 @@
 // - juice: restock pops along the row, green skunk puffs, Rush floats, coins (fx.js) on RING UP
 // Budget: about 10 draw calls on top of the crowd's visible meshes; nothing here casts a shadow but the hero rigs.
 import * as THREE from 'three';
-import { lerp, damp, ease, glide, tickKey, gameDt, prepGeo, mergeGeometries, BOX, CYL8, PG, PG_LO, lodFar, PM, M, VC, VARIETY } from './kit.js';
+import { lerp, damp, ease, glide, Glider, tickKey, gameDt, prepGeo, mergeGeometries, BOX, CYL8, PG, PG_LO, lodFar, PM, M, VC, VARIETY } from './kit.js';
 import { makeQuad, makeTownsfolk } from './folk.js';
 import { PLACES, HIDEOUTS, ROAD, rowZ, aisleZ } from '../sim/layout.js';
 import { pose as carPose } from '../sim/traffic.js';
 import { T } from '../sim/tuning.js';
+import type { State, OutEvent } from '../sim/types.js';
+import type { Kit } from './types.js';
+import { Season } from '../sim/state.js';
 
 const CAR_COLS = [0xb5543f, 0x6f8b7b, 0x34445a, 0xe9d18a, 0xa9a8ad, 0xd98aa0, 0x8fb9b1, 0xefe7cf];
 const SHUTTLE = 0xe5b84a;
 const VCOL = { classic: 0xe0843a, mini: 0xeaa04a, white: 0xebe4d2, warty: 0xc8a24c, cinderella: 0xc4532a, blue: 0x93a7a6 };
-const C3 = (hex) => new THREE.Color(hex);
+const C3 = (hex: THREE.ColorRepresentation|undefined) => new THREE.Color(hex);
 const WATER = -0.88, AX = new THREE.Vector3();                   // the sea's surface (world.js)
-const SEAL_COATS = 5, coatOf = (f) => (f.species === 'seal' ? ((f.id * 2654435761) >>> 0) % SEAL_COATS : 0);   // per family
-const turn = (a, b, k) => { let d = b - a; d = Math.atan2(Math.sin(d), Math.cos(d)); return a + d * k; };
+const SEAL_COATS = 5, coatOf = (f: { species: string; id: number; }) => (f.species === 'seal' ? ((f.id * 2654435761) >>> 0) % SEAL_COATS : 0);   // per family
+const turn = (a: number, b: number, k: number) => { let d = b - a; d = Math.atan2(Math.sin(d), Math.cos(d)); return a + d * k; };
 // gaits: the crowd's bob is one step (pi of phase) per 0.75 world units walked, a kid's hop one per 0.9
 const PH_STEP = Math.PI / 0.75, PH_HOP = Math.PI / 0.9, SCAMPER = 4.5;   // a kid running to the fort and back, u/s at 1x
 const TPS = T.calendar.weekend.ticksPerSecond, LOT_Z = -6.9;     // the lot's roofs, south of the footpath at Marlene's edge
@@ -41,10 +44,10 @@ const U_ARC = 0.9, U_R = 0.75, U_BACK = 5;        // a U-turn: half a circle in 
 // a car ahead of one swinging round must be this far ahead (its nose sweeps ~1.3 east as it swings south), and so the
 // line's first car waits this far back from the mouth: a car coming onto the lane is never in a U-turn's sweep
 const U_REACH = SPACE + 0.1, HEAD = U_REACH + 0.2;
-const carCol = (f, id) => (f?.park === 'shuttle' ? SHUTTLE : CAR_COLS[id % CAR_COLS.length]);
+const carCol = (f: unknown, id: number) => (f?.park === 'shuttle' ? SHUTTLE : CAR_COLS[id % CAR_COLS.length]);
 // kids running between the queue and the hay fort go round the stand's north-west corner, not through the stand
 const [SX0, SZ0, SX1, SZ1] = PLACES.stand.rect, STAND_NW = { x: SX0 - 0.35, z: SZ1 + 0.3 };
-function aroundStand(x, z, tx, tz) {
+function aroundStand(x: number, z: number, tx: number, tz: number) {
   for (let k = 1; k < 8; k++) {
     const px = x + ((tx - x) * k) / 8, pz = z + ((tz - z) * k) / 8;
     if (px > SX0 - 0.2 && px < SX1 + 0.2 && pz > SZ0 - 0.2 && pz < SZ1 + 0.2) return STAND_NW;
@@ -53,13 +56,13 @@ function aroundStand(x, z, tx, tz) {
 }
 
 // one merged, vertex-coloured geometry from boxes/cylinders: [geo, color, pos, scale, rot]
-function build(parts) {
+function build(parts: [any,any,any,any,(number[]|undefined)?][]|((number|any[]|THREE.CylinderGeometry)[]|(number|number[]|THREE.BoxGeometry)[])[]) {
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
   return mergeGeometries(parts.map(([g, col, p, s, r = [0, 0, 0]]) => prepGeo(g, m.compose(new THREE.Vector3(...p), q.setFromEuler(e.set(...r)), new THREE.Vector3(...s)), C3(col))));
 }
-const WHEELS = (dx, dz, r, w) => [[-dx, -dz], [dx, -dz], [-dx, dz], [dx, dz]].map(([x, z]) => [CYL8, 0x2d2a28, [x, r, z], [r, w, r], [Math.PI / 2, 0, 0]]);
+const WHEELS = (dx: number, dz: number, r: number, w: number) => [[-dx, -dz], [dx, -dz], [-dx, dz], [dx, dz]].map(([x, z]) => [CYL8, 0x2d2a28, [x, r, z], [r, w, r], [Math.PI / 2, 0, 0]]);
 
-export default function createSeasonView(K) {
+export default function createSeasonView(K: Kit) {
   const { scene, folk, hit, fx, phone, world } = K;
   const S = T.season, cap = phone ? S.visibleCap.phone : S.visibleCap.desktop;
   const root = new THREE.Group(); root.name = 'season'; scene.add(root);
@@ -87,7 +90,7 @@ export default function createSeasonView(K) {
   let nCar = 0, nWag = 0, nPump = 0;
   // a car sits on the ground under its wheels: level on the land, pitched and rolled with the beach's slope
   const H = world?.heightAt || (() => 0);
-  const putCar = (x, z, yaw, hex, lift = 0) => {
+  const putCar = (x: number, z: number, yaw: number, hex: number|undefined, lift = 0) => {
     if (nCar >= cars.instanceMatrix.count) return;
     const fx = Math.cos(yaw) * 0.5, fz = -Math.sin(yaw) * 0.5, sx = -fz * 0.8, sz = fx * 0.8;   // half a wheelbase; half a track
     const hf = H(x + fx, z + fz), hb = H(x - fx, z - fz), hr = H(x + sx, z + sz), hl = H(x - sx, z - sz);
@@ -95,12 +98,12 @@ export default function createSeasonView(K) {
     cars.setMatrixAt(nCar, M4.compose(P.set(x, (hf + hb + hr + hl) / 4 + lift, z), Q.setFromEuler(EC), SC.set(1, 1, 1)));
     cars.setColorAt(nCar++, COL.setHex(hex));
   };
-  const putWagon = (x, z, yaw) => {
+  const putWagon = (x: number, z: number, yaw: number) => {
     if (nWag >= wagons.instanceMatrix.count) return;
     E.set(0, yaw, 0);
     wagons.setMatrixAt(nWag++, M4.compose(P.set(x, world.heightAt?.(x, z) ?? 0, z), Q.setFromEuler(E), SC.set(1, 1, 1)));
   };
-  const putPump = (x, y, z, v, s = 1) => {
+  const putPump = (x: number, y: number, z: number, v: string, s = 1) => {
     if (nPump >= pumps.instanceMatrix.count) return;
     const r = (v === 'mini' ? 0.14 : 0.24) * s, sy = VARIETY[v]?.sy ?? 1;
     pumps.setMatrixAt(nPump, M4.compose(P.set(x, (world.heightAt?.(x, z) ?? 0) + y, z), Q.identity(), SC.set(r, r * sy, r)));
@@ -109,7 +112,7 @@ export default function createSeasonView(K) {
 
   // A harbor seal noses her pumpkins along in front of her (and her pups their minis): on the ground, rolling with the
   // distance walked about the axis across her heading; out past the water's edge they float.
-  const putRoll = (x, z, v, s, yaw, dist) => {
+  const putRoll = (x: number, z: number, v: string, s: number, yaw: number, dist: number) => {
     if (nPump >= pumps.instanceMatrix.count) return;
     const r = (v === 'mini' ? 0.14 : 0.24) * s, sy = VARIETY[v]?.sy ?? 1, g = H(x, z);
     const y = g < WATER - 0.05 ? WATER - r * sy * 0.35 + Math.sin(dist * 3 + x) * 0.02 : g + r * sy;
@@ -118,7 +121,7 @@ export default function createSeasonView(K) {
     pumps.setColorAt(nPump++, COL.setHex(VCOL[v] || 0xe0843a));
   };
   // ...and swims with just her head out of the water: how deep it is under her decides how far she's sunk
-  const swimY = (x, z, kid) => {
+  const swimY = (x: any, z: any, kid: boolean) => {
     const g = H(x, z), wet = Math.min(1, Math.max(0, (WATER - g) / 0.3));   // the sea floor is only 0.35 under
     return { y: wet ? lerp(g, WATER - (kid ? 0.5 : 0.95), wet) : undefined, wet };
   };
@@ -130,7 +133,7 @@ export default function createSeasonView(K) {
   const sacs = new THREE.InstancedMesh(sacGeo, M(0xd29a76, { side: THREE.DoubleSide }), 24);
   sacs.count = 0; sacs.frustumCulled = false; sacs.castShadow = false; root.add(sacs);
   let nSac = 0;
-  const putPouch = (x, z, yaw, v) => {
+  const putPouch = (x: number, z: number, yaw: number, v: string) => {
     if (nSac >= sacs.instanceMatrix.count) return;
     const fx = Math.sin(yaw), fz = Math.cos(yaw), h = world.heightAt?.(x, z) ?? 0, mini = v === 'mini';
     const k = mini ? 0.8 : 1, [sx, sy, sz] = POUCH.sag;
@@ -142,29 +145,29 @@ export default function createSeasonView(K) {
   // ---- characters that come and go
   const goat = makeQuad('pamela'); goat.root.visible = false; scene.add(goat.root);
   const G = { x: 7.5, z: 0, on: false, eat: 0 };
-  const runaway = new THREE.Mesh(PG, PM(0xe0843a)), RG = {};
+  const runaway = new THREE.Mesh(PG, PM(0xe0843a)), RG = new Glider();
   runaway.scale.setScalar(0.3); runaway.visible = false; runaway.castShadow = true; scene.add(runaway);
   const hires = {};                                                 // dez, howie: built when first hired
-  const hireRig = (who) => hires[who] ||= (() => { const r = makeTownsfolk(who); scene.add(r.root); return r; })();
+  const hireRig = (who: string) => hires[who] ||= (() => { const r = makeTownsfolk(who); scene.add(r.root); return r; })();
 
   // ---- display state: eased positions, walk phase, kids trailing
   const disp = new Map(), carG = new Map();                         // families; cars' glide along their routes
-  const timeline = [];                                              // delayed fx (restock pops 40 ms apart, puff wisps)
+  const timeline: any[] = [];                                              // delayed fx (restock pops 40 ms apart, puff wisps)
   const shown = new Set(), FR = new THREE.Frustum();                // families drawn (the phone's cap); the camera's view
-  const famOf = (se, id) => { for (const f of se.families) if (f.id === id) return f; return null; };
-  const uturns = [], line = new Map(), colOf = new Map();          // the Route 46 line by key; each car's paint
-  let lineKeys = [], lineDay = -1, turnedNow = 0;
-  const uturnX = (u) => (u.t < U_ARC ? u.x + U_R * Math.sin((Math.max(0, u.t) / U_ARC) * Math.PI) : u.x - (u.t - U_ARC) * U_BACK);
+  const famOf = (se: Season, id: unknown) => { for (const f of se.families) if (f.id === id) return f; return null; };
+  const uturns: any[] = [], line = new Map(), colOf = new Map();          // the Route 46 line by key; each car's paint
+  let lineKeys: Iterable<any>|null|undefined = [], lineDay = -1, turnedNow = 0;
+  const uturnX = (u: { t: number; x: number; }) => (u.t < U_ARC ? u.x + U_R * Math.sin((Math.max(0, u.t) / U_ARC) * Math.PI) : u.x - (u.t - U_ARC) * U_BACK);
   let lastMin = -1, granHeld = false, waveT = 0, beachRows = 0;
-  const clk = {};
+  const clk: { t?: number } = {};
   const hitIds = new Set();
 
   // A family's drawn position glides between the sim's ticks; its speed, heading and walking phase come from what was
   // actually drawn, so the bob keeps time with the ground at 1x, 2x or in bullet time. (Riding in a car, it isn't drawn.)
-  function follow(f, dt, gdt, key, acc) {
+  function follow(f: unknown, dt: number, gdt: number, key: number, acc: number) {
     let d = disp.get(f.id);
     if (!d) {
-      d = { x: f.x, z: f.z, h: f.heading ?? 0, ph: Math.random() * 6, v: 0, g: {}, dist: 0,
+      d = { x: f.x, z: f.z, h: f.heading ?? 0, ph: Math.random() * 6, v: 0, g: new Glider(), dist: 0,
         k: [{ x: f.x, z: f.z, ph: Math.random() * 3, v: 0, dist: 0 }, { x: f.x, z: f.z, ph: Math.random() * 3, v: 0, dist: 0 }], hop: 0 };
       disp.set(f.id, d);
     }
@@ -182,12 +185,12 @@ export default function createSeasonView(K) {
   }
 
   // dt: real seconds this frame (eases and blends); gdt: game seconds (motion), so 2x is exactly twice as brisk
-  function drawFamily(s, f, d, dt, gdt) {
+  function drawFamily(s: State, f: unknown, d: { h: any; v: number; hop: number; x: number|undefined; z: number|undefined; ph: number|undefined; k: any[]; dist: any; }, dt: number, gdt: number) {
     const sp = f.species, yaw = d.h, fwx = Math.sin(yaw), fwz = Math.cos(yaw), sdx = Math.cos(yaw), sdz = -Math.sin(yaw);
     if (f.state === 'maze') return false;                           // lost in the corn
     const speed = f.state === 'pick' ? 0 : d.v * 0.4;
     d.hop = Math.max(0, d.hop - dt);
-    if (f.kids?.some((k) => k.hop)) d.hop = 1.2;
+    if (f.kids?.some((k: { hop: any; }) => k.hop)) d.hop = 1.2;
     const seal = sp === 'seal', coat = coatOf(f), sw = seal ? swimY(d.x, d.z, false) : null;
     crowd.put(sp, false, d.x, d.z, yaw, d.ph, sw?.wet > 0.5 ? 0 : speed, seal ? { coat, y: sw.y, noBlob: sw.wet > 0 } : f.state === 'pick' ? { waddle: 0.05 } : {});
     // kids: possum joeys ride on mom, a sea otter's pup on her chest (in her geometry; the pup's mini sits on mom's tummy);
@@ -222,13 +225,13 @@ export default function createSeasonView(K) {
       }
     }
     // what they've picked: in the wagon, else in mom's arms
-    const big = (f.cart || []).filter((c) => !c.kid);
+    const big = (f.cart || []).filter((c: { kid: any; }) => !c.kid);
     if (f.wagon) {
       const wx = d.x - fwx * 1.0, wz = d.z - fwz * 1.0;
       putWagon(wx, wz, yaw + Math.PI / 2);
-      big.slice(0, 3).forEach((c, i) => putPump(wx + sdx * (i - 1) * 0.22, 0.62, wz + sdz * (i - 1) * 0.22, c.v, 0.75));
+      big.slice(0, 3).forEach((c: { v: any; }, i: number) => putPump(wx + sdx * (i - 1) * 0.22, 0.62, wz + sdz * (i - 1) * 0.22, c.v, 0.75));
     } else if (big.length && sp === 'pelican') putPouch(d.x, d.z, yaw, big[0].v);
-    else if (big.length && seal) big.slice(0, 2).forEach((c, i, a) => {   // nosed along ahead of her
+    else if (big.length && seal) big.slice(0, 2).forEach((c: { v: any; }, i: number, a: string|any[]) => {   // nosed along ahead of her
       const sd = (i - (a.length - 1) / 2) * 0.5;
       putRoll(d.x + fwx * 1.1 + sdx * sd, d.z + fwz * 1.1 + sdz * sd, c.v, 0.85, yaw, d.dist);
     });
@@ -242,11 +245,11 @@ export default function createSeasonView(K) {
   // Out of Marlene: a car coming onto the tile drives out of the line waiting at the road's mouth (or, for a pick-up from
   // the car park, out of the fog behind it), so it is drawn a little behind where the sim has it (lag) and catches up;
   // on the lane's straight no car is ever drawn closer than a car length and a gap to the one ahead, even for a frame.
-  function drawCars(s, key, acc, gdt) {
+  function drawCars(s: State, key: number, acc: number, gdt: number) {
     const se = s.season, fams = new Map(se.families.map((f) => [f.id, f]));
     if (s.clock.day !== lineDay) { lineDay = s.clock.day; line.clear(); lineKeys = []; uturns.length = 0; }
     for (const id of colOf.keys()) if (!se.cars.some((c) => c.id === id)) colOf.delete(id);
-    const colFor = (c) => { let k = colOf.get(c.id); if (k == null) colOf.set(c.id, (k = carCol(fams.get(c.fam), c.fam))); return k; };
+    const colFor = (c: unknown) => { let k = colOf.get(c.id); if (k == null) colOf.set(c.id, (k = carCol(fams.get(c.fam), c.fam))); return k; };
     // the line on Route 46 at the patch side's mouth: cars with a space waiting their turn to come in (fog cars, in the
     // order they go), then the cars still waiting for a space (s.season.road.cars), front first
     const fog0 = se.cars.filter((c) => c.q >= 0 && c.r !== 'stand').sort((a, b) => a.q - b.q);
@@ -289,7 +292,7 @@ export default function createSeasonView(K) {
     // on each side's straight, front first: nobody is drawn into the car ahead (the lag takes up the difference)
     // (a car about to U-turn, or swinging round, holds its bit of the patch side's lane: whoever's behind waits)
     let rear0 = MOUTH;
-    const held = uturns.filter((u) => u.t < U_ARC).map((u) => u.x), lane0 = [];
+    const held = uturns.filter((u) => u.t < U_ARC).map((u) => u.x), lane0: any[] = [];
     const swinging = uturns.filter((u) => u.t >= 0 && u.t < U_ARC).map((u) => u.x + U_REACH);
     lanes.forEach((L, sd) => {
       L.sort((a, b) => b.p.x - a.p.x);
@@ -342,7 +345,7 @@ export default function createSeasonView(K) {
     }
   }
 
-  function drawWagons(s) {
+  function drawWagons(s: State) {
     const W = s.season.wagons;
     for (let i = 0; i < Math.min(4, W.free); i++) putWagon(PLACES.corral.x + (i % 2) * 0.35 - 0.2, PLACES.corral.z + Math.floor(i / 2) * 0.62 - 0.3, 0.2 + i * 0.12);
     for (const w of W.strays) putWagon(w.x, w.z, (w.x * 7) % 3);
@@ -356,7 +359,7 @@ export default function createSeasonView(K) {
   }
 
   // Pamela ambles in from the beach and between rows (~1.5-2 u/s), and trots off when you shoo her (up to 4 u/s).
-  function drawGoat(s, dt, gdt) {
+  function drawGoat(s: State, dt: number, gdt: number) {
     const g = s.season.goat;
     if (!g && !G.on) { goat.root.visible = false; G.v = 0; return; }
     if (g && !G.on) { G.on = true; G.x = 8; G.z = g.z; goat.root.visible = true; }
@@ -369,9 +372,9 @@ export default function createSeasonView(K) {
     if (!g && d < 0.2) { G.on = false; goat.root.visible = false; }
   }
 
-  function syncHits(s) {
+  function syncHits(s: State) {
     const live = new Set(), se = s.season;
-    const add = (box, pr = 3) => { hit.add(box, pr); live.add(`${box.kind}:${box.id}`); };
+    const add = (box: { kind: string; id: number; rect: number[]; priority: number; }|{ kind: string; id: string; rect: number[]; priority: number; circle?: undefined; }|{ kind: string; id: string; circle: number[]; priority: number; rect?: undefined; }, pr = 3) => { hit.add(box, pr); live.add(`${box.kind}:${box.id}`); };
     if (s.unlocks.wants || s.clock.year > 1) for (const f of se.families) {
       if (f.state !== 'want' || f.bubble?.kind !== 'want') continue;
       const d = disp.get(f.id); if (d) add({ kind: 'family', id: f.id, circle: [d.x, d.z, 0.7], y: [0, 2] });
@@ -386,7 +389,7 @@ export default function createSeasonView(K) {
   }
 
   const lod = { far: false };
-  function sync(s, dt) {
+  function sync(s: State, dt: number) {
     pumps.geometry = lodFar(lod, K.cam?.pxPerUnit ?? Infinity) ? PG_LO : PG;   // pumpkins in arms and wagons (render/patch.js)
     nCar = 0; nWag = 0; nPump = 0; nSac = 0;
     crowd.begin();
@@ -449,7 +452,7 @@ export default function createSeasonView(K) {
     }
     if (granHeld && (waveT -= dt) <= 0) { waveT = 2.4; K.cast.fx?.({ type: 'cast', who: 'gran', act: 'wave', secs: 1.4 }); if (K.cast.gran) K.cast.gran.root.rotation.y = -Math.PI / 2; }
     // hires at work: Dez at the till (or in the hay fort), Howie waving cars in
-    const hired = (who) => s.hires?.[who] === s.clock.year;
+    const hired = (who: string) => s.hires?.[who] === s.clock.year;
     for (const who of ['dez', 'howie']) {
       if (!hired(who)) { if (hires[who]) hires[who].root.visible = false; continue; }
       const r = hireRig(who);
@@ -473,8 +476,8 @@ export default function createSeasonView(K) {
 
   // read-only handles for tools/speeds.mjs (what is drawn where, frame by frame)
   K.seasonView = { disp, shown, goat: G, runaway: runaway.position };
-  const later = (t, fn) => timeline.push({ t, fn });
-  function fxEvent(ev) {
+  const later = (t: number, fn: { (): void; (): void; }) => timeline.push({ t, fn });
+  function fxEvent(ev: OutEvent) {
     switch (ev.type) {
       case 'patch/restock': {
         if (ev.by !== 'farmer' && ev.by !== 'bea') break;

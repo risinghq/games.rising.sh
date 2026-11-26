@@ -11,6 +11,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { clamp, lerp, ease, damp, smooth } from './kit.js';
 import { fogU } from './fog.js';
+import type { Kit } from './types.js';
 
 const VIEW_H = 52, ISO = -Math.PI / 4, POLAR = Math.acos(1.25 / Math.hypot(1, 1.25, 1)), EYE = 1.7;
 const HOME = { x: -2.6, z: -0.4 };
@@ -30,16 +31,27 @@ export const FRAMES = {
   // stand's sign face-on while you name the farm
   dock: { x: 12.7, z: 5.6, fit: 6.5, az: 0 },
   sign: { x: -5, z: -7.3, fit: 5.5, az: 0 },
-};
-const azOf = (v) => Math.atan2(v.x, v.z);
-const isoAz = (a) => ISO + Math.round((a - ISO) / (Math.PI / 2)) * (Math.PI / 2);
-const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+} satisfies Record<string, Frame>;
+type FrameName = keyof typeof FRAMES;
+interface Frame { x: number; z: number; fit: number; az?: number }
+const isFrame = (k: string): k is FrameName => k in FRAMES;
+/** One end of the swoop between the two cameras: where it looks, from which direction, how much it shows. */
+interface ViewState { look: THREE.Vector3; dir: THREE.Vector3; H: number; fov: number }
+interface Trans { to: 'stroll' | 'overhead'; a: ViewState; b: ViewState; start: number; dur: number }
+interface Glide {
+  ms: number; t0: number; from: THREE.Vector3; to: THREE.Vector3; z0: number; z1: number; az0: number; az1: number;
+  p0: number; p1: number; r: number;
+}
+const azOf = (v: THREE.Vector3) => Math.atan2(v.x, v.z);
+const isoAz = (a: number) => ISO + Math.round((a - ISO) / (Math.PI / 2)) * (Math.PI / 2);
+const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
-export function createCamera(K) {
+export function createCamera(K: Kit) {
   const { renderer, settings } = K, dom = renderer.domElement;
   const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 500);
   const persp = new THREE.PerspectiveCamera(70, 1, 0.05, 900);
-  let W = 1, H = 1, active = ortho, view = 'overhead', trans = null, glideA = null, followObj = null, titleOn = false;
+  let W = 1, H = 1, active: THREE.OrthographicCamera | THREE.PerspectiveCamera = ortho, view = 'overhead', trans: Trans | null = null, glideA: Glide | null = null;
+  let followObj: THREE.Object3D | null = null, titleOn = false;
   // screen px covered by UI: bottom (tray + sheet, eased), top (HUD), right (the desktop sheet panel, eased)
   let inset = { want: 0, cur: 0, top: 0, right: 0, rcur: 0 }, snapPending = false, lastAz = 0, touchedAt = -1e9;
   const now = () => performance.now();
@@ -68,7 +80,7 @@ export function createCamera(K) {
 
   // ---------------------------------------------------------------- twist (two-finger rotate)
   const touches = new Map();
-  let twistA = null;
+  let twistA: number|null = null;
   const twistAngle = () => { const [a, b] = [...touches.values()]; return Math.atan2(b.y - a.y, b.x - a.x); };
   dom.addEventListener('pointerdown', (e) => {
     if (e.pointerType !== 'touch') return;
@@ -82,12 +94,12 @@ export function createCamera(K) {
     const a = twistAngle(), d = wrap(a - twistA); twistA = a;
     if (Math.abs(d) < 0.3) rotateBy(-d);
   });
-  const endTouch = (e) => {
+  const endTouch = (e: { pointerId: any; }) => {
     if (!touches.delete(e.pointerId)) return;
     if (twistA !== null && touches.size < 2) { twistA = null; snapPending = true; }
   };
   dom.addEventListener('pointerup', endTouch); dom.addEventListener('pointercancel', endTouch);
-  function rotateBy(a) {
+  function rotateBy(a: number) {
     const o = ortho.position.clone().sub(controls.target).applyAxisAngle(THREE.Object3D.DEFAULT_UP, a);
     ortho.position.copy(controls.target).add(o); ortho.lookAt(controls.target);
   }
@@ -105,13 +117,13 @@ export function createCamera(K) {
   }
   // zoom that fits `fit` world units in the visible area (0 = the whole farm, the Home view). Uses the insets the
   // UI asked for, not the eased ones, so a glide started as a sheet opens lands right.
-  function zoomFor(fit) {
+  function zoomFor(fit: number) {
     const visH = VIEW_H * clamp(1 - (inset.want + inset.top) / H, 0.25, 1), visW = VIEW_H * aspect() * clamp(1 - inset.right / W, 0.4, 1);
     // the whole tile seen from the isometric corner: ~46 units across, ~56 tall (lighthouse to the rocks under it)
     if (!fit) return clamp(Math.min(visW / 46, visH / 56, 1.05), 0.38, 1.05);
     return clamp(Math.min(visW, visH) / fit, 0.38, controls.maxZoom);
   }
-  function resize(w, h) {
+  function resize(w: number, h: number) {
     W = Math.max(1, w); H = Math.max(1, h);
     persp.aspect = W / H; persp.updateProjectionMatrix();
     frameOrtho();
@@ -119,7 +131,7 @@ export function createCamera(K) {
 
   // ---------------------------------------------------------------- glides
   // Glide target, zoom and (optionally) azimuth and polar angle together. Any touch cancels a glide.
-  function glide(x, z, zoom = ortho.zoom, ms = 600, az, polar) {
+  function glide(x: number, z: number, zoom = ortho.zoom, ms = 600, az?: number|undefined, polar?: number|undefined) {
     if (view !== 'overhead') return;
     const off = ortho.position.clone().sub(controls.target), r = off.length(), p0 = Math.acos(clamp(off.y / r, -1, 1));
     glideA = {
@@ -130,8 +142,10 @@ export function createCamera(K) {
     };
     if (glideA.ms === 0) stepGlide(1);
   }
-  function stepGlide(k) {
-    const g = glideA, e = ease(k);
+  function stepGlide(k: number) {
+    const g = glideA;
+    if (!g) return;
+    const e = ease(k);
     controls.target.copy(g.from).lerp(g.to, e);
     const az = g.az0 + wrap(g.az1 - g.az0) * e, p = lerp(g.p0, g.p1, e);
     ortho.position.copy(controls.target).add(new THREE.Vector3(Math.sin(p) * Math.sin(az), Math.cos(p), Math.sin(p) * Math.cos(az)).multiplyScalar(g.r));
@@ -139,8 +153,8 @@ export function createCamera(K) {
     ortho.lookAt(controls.target);
     if (k >= 1) glideA = null;
   }
-  const frame = (kind, ms = 650) => {
-    const f = FRAMES[kind] || FRAMES.home;
+  const frame = (kind: string, ms = 650) => {
+    const f: Frame = isFrame(kind) ? FRAMES[kind] : FRAMES.home;
     glide(f.x, f.z, zoomFor(f.fit), ms, f.az);
   };
   // Home: the whole farm, from the prototype's isometric corner
@@ -156,16 +170,16 @@ export function createCamera(K) {
 
   // ---------------------------------------------------------------- stroll (first person)
   const player = { pos: new THREE.Vector3(), yaw: 0, pitch: -0.08, bob: 0 };
-  const keys = new Set(), joy = new THREE.Vector2();
-  const onKey = (e) => {
-    if (view !== 'stroll' || /INPUT|TEXTAREA/.test(e.target?.tagName)) return;
+  const keys = new Set<string>(), joy = new THREE.Vector2();
+  const onKey = (e: KeyboardEvent) => {
+    if (view !== 'stroll' || (e.target instanceof HTMLElement && /INPUT|TEXTAREA/.test(e.target.tagName))) return;
     keys.add(e.key.toLowerCase());
   };
-  const offKey = (e) => keys.delete(e.key.toLowerCase());
+  const offKey = (e: KeyboardEvent) => keys.delete(e.key.toLowerCase());
   const blur = () => keys.clear();
   addEventListener('keydown', onKey); addEventListener('keyup', offKey); addEventListener('blur', blur);
-  const fpDir = (yaw, pitch) => new THREE.Vector3(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
-  let look = null;
+  const fpDir = (yaw: number, pitch: number) => new THREE.Vector3(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
+  let look: { id: number; x: number; y: number } | null = null;
   dom.addEventListener('pointerdown', (e) => {
     if (view !== 'stroll' || trans) return;
     look = { id: e.pointerId, x: e.clientX, y: e.clientY };
@@ -177,10 +191,10 @@ export function createCamera(K) {
     player.pitch = clamp(player.pitch + (e.clientY - look.y) * k, -1.2, 1.1);
     look.x = e.clientX; look.y = e.clientY;
   });
-  const endLook = (e) => { if (look && e.pointerId === look.id) look = null; };
+  const endLook = (e: PointerEvent) => { if (look && e.pointerId === look.id) look = null; };
   dom.addEventListener('pointerup', endLook); dom.addEventListener('pointercancel', endLook);
   const W_ = () => K.world;
-  function updateFP(dt) {
+  function updateFP(dt: number) {
     const blocked = W_().blocked, heightAt = W_().heightAt;
     let f = 0, s = 0;
     if (keys.has('w') || keys.has('arrowup')) f += 1;
@@ -213,7 +227,8 @@ export function createCamera(K) {
     const eye = new THREE.Vector3(player.pos.x, W_().heightAt(player.pos.x, player.pos.z) + EYE, player.pos.z);
     return { look: eye.clone().addScaledVector(fwd, 10), dir: fwd.clone().negate(), H: 2 * 10 * Math.tan(THREE.MathUtils.degToRad(35)), fov: 70 };
   }
-  function applyTrans(k) {
+  function applyTrans(k: number) {
+    if (!trans) return;
     const { a, b } = trans, e = ease(k);
     const lk = a.look.clone().lerp(b.look, e), dir = a.dir.clone().lerp(b.dir, e).normalize();
     const fov = lerp(a.fov, b.fov, e), Hh = Math.exp(lerp(Math.log(a.H), Math.log(b.H), e));
@@ -232,9 +247,9 @@ export function createCamera(K) {
       const t = controls.target, fwd = t.clone().sub(ortho.position); fwd.y = 0; fwd.normalize();
       player.pos.set(t.x, 0, t.z);
       // zoomed out: start at a favourite spot; zoomed in: drop onto a path near the view centre
-      let best = ortho.zoom < 1.6 ? [-10.6, 2.6, 0] : null;
+      let best: [number, number, number] | null = ortho.zoom < 1.6 ? [-10.6, 2.6, 0] : null;
       if (best) fwd.set(0.86, 0, -0.5);
-      const clear = (x, z) => { for (let k = 0.6; k < 7; k += 0.6) if (blocked(x + fwd.x * k, z + fwd.z * k)) return false; return true; };
+      const clear = (x: number, z: number) => { for (let k = 0.6; k < 7; k += 0.6) if (blocked(x + fwd.x * k, z + fwd.z * k)) return false; return true; };
       for (let i = 0; i < 600 && !(best && best[2] === 0); i++) {
         const x = t.x + (i * 7.31 % 16) - 8, z = t.z + (i * 3.77 % 16) - 8;
         if (blocked(x, z) || pathDist(x, z) > 0.4 || !clear(x, z)) continue;
@@ -255,6 +270,7 @@ export function createCamera(K) {
     K.emit?.('view', trans.to);
   }
   function finishTrans() {
+    if (!trans) return;
     const to = trans.to;
     if (to === 'stroll') { fogU.uFogFP.value = 1; view = 'stroll'; }
     else {
@@ -270,7 +286,7 @@ export function createCamera(K) {
   }
 
   // ---------------------------------------------------------------- per frame
-  function update(rdt) {
+  function update(rdt: number) {
     const dt = Math.min(rdt, 0.1);
     if (Math.abs(inset.cur - inset.want) > 0.5 || Math.abs(inset.rcur - inset.right) > 0.5) {
       const k = reduce() ? 1 : damp(rdt, 9);
@@ -291,7 +307,7 @@ export function createCamera(K) {
     }
     if (glideA) stepGlide(glideA.ms ? clamp((now() - glideA.t0) / glideA.ms, 0, 1) : 1);
     else if (followObj) {
-      const p = followObj.getWorldPosition?.(new THREE.Vector3()) ?? followObj, k = damp(rdt, 4);
+      const p = followObj.getWorldPosition(new THREE.Vector3()), k = damp(rdt, 4);
       const dx = (p.x - controls.target.x) * k, dz = (p.z - controls.target.z) * k;
       controls.target.x += dx; controls.target.z += dz; ortho.position.x += dx; ortho.position.z += dz;
     }
@@ -317,7 +333,7 @@ export function createCamera(K) {
     setInset(px = 0, top = inset.top, right = inset.right) {
       inset.want = Math.max(0, px); inset.top = Math.max(0, top); inset.right = Math.max(0, right); frameOrtho();
     },
-    follow(obj) { followObj = obj || null; },
+    follow(obj: THREE.Object3D | null) { followObj = obj; },
     // turn the view by an angle (a desktop rotate button, tests); it snaps to an isometric angle after
     rotate(a = Math.PI / 2, ms = 450) {
       if (view !== 'overhead') return;
@@ -328,7 +344,7 @@ export function createCamera(K) {
     get azimuth() { return azOf(ortho.position.clone().sub(controls.target)); },
     // thumb joystick: x right, y down, each -1..1 (the prototype's #joy)
     setJoy(x = 0, y = 0) { joy.set(clamp(x, -1, 1), clamp(y, -1, 1)); },
-    title(on) {
+    title(on: boolean) {
       if (on === titleOn) return;
       titleOn = !!on; controls.enabled = !on; glideA = null; followObj = null;
       if (on) glide(-2, 0, zoomFor(0) * 0.92, 0); else home(900);

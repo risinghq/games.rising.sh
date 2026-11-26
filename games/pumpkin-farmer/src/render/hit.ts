@@ -10,46 +10,49 @@
 // left to the camera (pan, pinch, twist).
 import * as THREE from 'three';
 import { ZONES } from '../sim/layout.js';
+import type { Zone } from '../sim/layout.js';
+import type { Hit, HitHandler, Kit } from './types.js';
 
 const TAP_PX = 10, TAP_MS = 300, LONG_MS = 450, REACH_PX = 24;
 // render-side heights for the static zones, [y0, y1]
-const HEIGHTS = {
+const HEIGHTS: Record<string, [number, number]> = {
   giant: [0, 3.2], stand: [0, 2.6], barn: [0, 6.2], hives: [0, 1.3], scale: [0, 2.4], lot: [0, 0.5],
   lighthouse: [2.8, 8.2], scarecrow: [0, 2.6], weighmaster: [0, 2.8], boat: [-0.9, 0.3], row: [0, 0.6],
 };
 
-export function createHit(K) {
+export function createHit(K: Kit) {
   const { renderer } = K, dom = renderer.domElement;
-  const boxes = new Map(), handlers = { tap: [], longpress: [], doubletap: [], hover: [] };
+  const boxes = new Map<string, Zone & { y: [number, number]; priority: number }>();
+  const handlers: Record<string, HitHandler[]> = { tap: [], longpress: [], doubletap: [] };
   const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   const P = new THREE.Vector3(), Q = new THREE.Vector3();
-  const keyOf = (kind, id) => `${kind}:${id}`;
+  const keyOf = (kind: string, id: string | number | null) => `${kind}:${id}`;
 
   // { id, kind, circle: [x, z, r] } or { id, kind, rect: [x0, z0, x1, z1] }; optional y: [y0, y1].
   // Adding the same kind+id again moves/replaces it, so moving things can re-add every frame.
-  function add(box, priority = box.priority ?? 1) {
-    const y = box.y || HEIGHTS[box.id] || HEIGHTS[box.kind] || [0, 0];
+  function add(box: Zone, priority = box.priority ?? 1) {
+    const y = box.y ?? HEIGHTS[String(box.id)] ?? HEIGHTS[box.kind] ?? [0, 0];
     boxes.set(keyOf(box.kind, box.id), { ...box, y, priority });
   }
-  function remove(id, kind) {
+  function remove(id: string | number, kind?: string) {
     for (const [k, b] of boxes) if (b.id === id && (kind === undefined || b.kind === kind)) boxes.delete(k);
   }
   for (const z of ZONES) add(z, z.priority);
 
   const rect = () => dom.getBoundingClientRect();
-  function rayAt(cx, cy) {
+  function rayAt(cx: number, cy: number) {
     const r = rect();
     ndc.set(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
     ray.setFromCamera(ndc, K.cam.active);
     return r;
   }
   // screen px of a world point
-  function toScreen(v, r) {
+  function toScreen(v: THREE.Vector3Like, r: DOMRect) {
     Q.copy(v).project(K.cam.active);
     return [r.left + (Q.x + 1) / 2 * r.width, r.top + (1 - Q.y) / 2 * r.height];
   }
   // nearest point of a box to (x, z) at height y
-  function nearest(b, x, z, y) {
+  function nearest(b: Zone, x: number, z: number, y: number) {
     if (b.circle) {
       const [cx, cz, cr] = b.circle, d = Math.hypot(x - cx, z - cz);
       return d <= cr ? P.set(x, y, z) : P.set(cx + (x - cx) / d * cr, y, cz + (z - cz) / d * cr);
@@ -57,9 +60,9 @@ export function createHit(K) {
     const [x0, z0, x1, z1] = b.rect;
     return P.set(Math.min(Math.max(x, x0), x1), y, Math.min(Math.max(z, z0), z1));
   }
-  function pick(cx, cy) {
+  function pick(cx: number, cy: number) {
     const r = rayAt(cx, cy);
-    let best = null;
+    let best: { kind: string; id: string | number; x: number; z: number; d: number; priority: number } | null = null;
     for (const b of boxes.values()) {
       if (b.enabled === false) continue;
       const [y0, y1] = b.y;
@@ -68,7 +71,7 @@ export function createHit(K) {
         plane.constant = -y;
         if (!ray.ray.intersectPlane(plane, Q)) continue;
         const qx = Q.x, qz = Q.z;
-        const [sx, sy] = toScreen(nearest(b, qx, qz, y), r);
+        const [sx = 0, sy = 0] = toScreen(nearest(b, qx, qz, y), r);
         const dd = Math.hypot(sx - cx, sy - cy);
         if (dd < d) { d = dd; hx = P.x; hz = P.z; }
       }
@@ -80,11 +83,11 @@ export function createHit(K) {
     return best && { kind: best.kind, id: best.id, x: best.x, z: best.z };
   }
   // where a screen point meets the ground (y = 0), or null
-  function ground(cx, cy) {
+  function ground(cx: number, cy: number) {
     rayAt(cx, cy); plane.constant = 0;
     return ray.ray.intersectPlane(plane, Q) ? { x: Q.x, z: Q.z } : null;
   }
-  const hitOrGround = (cx, cy) => {
+  const hitOrGround = (cx: number, cy: number): Hit | null => {
     const h = pick(cx, cy);
     if (h) return h;
     const g = ground(cx, cy);
@@ -92,10 +95,10 @@ export function createHit(K) {
   };
 
   // ---------------------------------------------------------------- gestures
-  const downs = new Map();
-  let longTimer = 0, lastTap = null, hoverAt = 0, hoverKey = null;
-  const emit = (type, hit, e) => { for (const fn of handlers[type]) fn(hit, e); };
-  const onDown = (e) => {
+  const downs = new Map<number, { x: number; y: number; t: number; moved: boolean; long: boolean }>();
+  let longTimer: ReturnType<typeof setTimeout> | undefined, lastTap: { t: number; x: number; y: number } | null = null;
+  const emit = (type: string, hit: Hit, e: PointerEvent) => { for (const fn of handlers[type] ?? []) fn(hit, e); };
+  const onDown = (e: PointerEvent) => {
     downs.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now(), moved: downs.size > 0, long: false });
     if (downs.size > 1) { for (const d of downs.values()) d.moved = true; clearTimeout(longTimer); return; }
     clearTimeout(longTimer);
@@ -107,17 +110,11 @@ export function createHit(K) {
       if (h) emit('longpress', h, e);
     }, LONG_MS);
   };
-  const onMove = (e) => {
+  const onMove = (e: PointerEvent) => {
     const d = downs.get(e.pointerId);
-    if (d) { if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > TAP_PX) { d.moved = true; clearTimeout(longTimer); } return; }
-    if (e.pointerType !== 'mouse' || !handlers.hover.length) return;
-    const t = performance.now();
-    if (t - hoverAt < 90) return;
-    hoverAt = t;
-    const h = pick(e.clientX, e.clientY), key = h ? keyOf(h.kind, h.id) : null;
-    if (key !== hoverKey) { hoverKey = key; emit('hover', h, e); }
+    if (d && Math.hypot(e.clientX - d.x, e.clientY - d.y) > TAP_PX) { d.moved = true; clearTimeout(longTimer); }
   };
-  const onUp = (e) => {
+  const onUp = (e: PointerEvent) => {
     const d = downs.get(e.pointerId);
     downs.delete(e.pointerId);
     if (!d) return;
@@ -130,17 +127,17 @@ export function createHit(K) {
     if (lastTap && t - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) { emit('doubletap', h, e); lastTap = null; }
     else lastTap = { t, x: e.clientX, y: e.clientY };
   };
-  const onCancel = (e) => { downs.delete(e.pointerId); clearTimeout(longTimer); };
+  const onCancel = (e: PointerEvent) => { downs.delete(e.pointerId); clearTimeout(longTimer); };
   dom.addEventListener('pointerdown', onDown);
   dom.addEventListener('pointermove', onMove);
   dom.addEventListener('pointerup', onUp);
   dom.addEventListener('pointercancel', onCancel);
-  const noMenu = (e) => e.preventDefault();   // right-drag rotates; no context menu
+  const noMenu = (e: Event) => e.preventDefault();   // right-drag rotates; no context menu
   dom.addEventListener('contextmenu', noMenu);
 
   return {
     add, remove, pick, ground, boxes,
-    on(type, fn) { (handlers[type] ||= []).push(fn); return () => { handlers[type] = handlers[type].filter((f) => f !== fn); }; },
+    on(type: string, fn: HitHandler) { (handlers[type] ||= []).push(fn); return () => { handlers[type] = (handlers[type] ?? []).filter((f) => f !== fn); }; },
     dispose() {
       clearTimeout(longTimer);
       dom.removeEventListener('pointerdown', onDown); dom.removeEventListener('pointermove', onMove);

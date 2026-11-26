@@ -14,7 +14,9 @@ import {
   PI, lerp, rng, gait, M, C, VC, part, prepGeo, taperTube, mergeGeometries, disposeTree,
   ICO0, ICO1, CYL, CYL8, CONE, BOX,
 } from './kit.js';
+import type { V3 } from './kit.js';
 import { fogPatch } from './fog.js';
+import type { Kit } from './types.js';
 
 export const FOLK_SCALE = 1.25;
 export const SPECIES_KEYS = ['possum', 'skunk', 'raccoon', 'beaver', 'coyote', 'fox', 'owl', 'pelican', 'otter', 'seal'];
@@ -23,6 +25,23 @@ const R = rng(1201);
 // ---------------------------------------------------------------- species
 // fur/belly/limb/foot/headC colours, skull scale, eye placement, and face/tail builders.
 // Builders get (parent, c) where c(hex) is the (possibly greyed) cached material.
+/** The cached material for a colour, greyed when the character is old. */
+type Mat = (hex: number) => ReturnType<typeof C>;
+type Build = (parent: THREE.Object3D, c: Mat, sp: Look) => void;
+
+/** One of a species' coats (the harbor seals wear several). */
+interface Coat { name: string; fur: number; belly: number; headC: number; limb: number; spot: number; spots: number; spotS?: number }
+
+export interface Species {
+  fur?: number; belly?: number; headC?: number; limb?: number; foot?: number; wing?: number; iris?: number;
+  webbed?: boolean; flump?: boolean; skull?: V3; scale?: number; waddle?: number;
+  eyeZ?: number; eyeY?: number; eyeX?: number; eyeS?: number;
+  spot?: number; spots?: number; spotS?: number; coats?: Coat[];
+  face: Build; tail?: Build; back?: Build;
+}
+/** A species with its coat and colour overrides applied: the fur is settled. */
+export interface Look extends Species { fur: number }
+
 export const SPECIES = {
   possum: {
     fur: 0xa9a8ad, belly: 0xe9e5dc, headC: 0xf1ede4, limb: 0x4b4a4f, foot: 0xe9a3a7,
@@ -178,7 +197,7 @@ export const SPECIES = {
       { name: 'cocoa', fur: 0x7e6651, belly: 0x957d65, headC: 0x856d57, limb: 0x65513f, spot: 0x4e3e31, spots: 16 },
     ],
     face(h, c, sp) {
-      part(ICO1, c(sp.belly), [0, -0.08, 0.24], [0.15, 0.11, 0.12], [0, 0, 0], h);            // muzzle
+      part(ICO1, c(sp.belly ?? sp.fur), [0, -0.08, 0.24], [0.15, 0.11, 0.12], [0, 0, 0], h);            // muzzle
       part(ICO0, c(0x2b2a29), [0, -0.03, 0.35], [0.055, 0.032, 0.03], [0, 0, 0], h);          // V nostrils
       part(BOX, c(0x3a3634), [0, -0.15, 0.31], [0.05, 0.01, 0.02], [0, 0, 0], h);
       for (const sx of [-1, 1]) {
@@ -187,10 +206,22 @@ export const SPECIES = {
       }
     },
   },
-};
+} satisfies Record<string, Species>;
+const SPECIES_BY_KEY: Record<string, Species> = SPECIES;
+const speciesOf = (key: string | undefined) => (key === undefined ? undefined : SPECIES_BY_KEY[key]);
 
 // ---------------------------------------------------------------- accessories
-// Each gets the rig under construction (f: { head, body, hips, shoulders, sp, top }) and options.
+/** The rig under construction, as an accessory sees it. */
+interface Fit {
+  root: THREE.Group; body: THREE.Bone; head: THREE.Bone; hips: THREE.Bone[]; shoulders: THREE.Bone[];
+  sp: Look; top: number;
+}
+interface AccOpts { color?: number; band?: number; spots?: boolean; pin?: number; style?: string; back?: boolean; bill?: number }
+/** An accessory: its name, or its name with options. */
+type AccSpec = string | [string, AccOpts];
+type Acc = (f: Fit, o: AccOpts, c: Mat) => void;
+
+// Each gets the rig under construction and options.
 const ACC = {
   // straw sun hat: the farmer's, Grandpa's lucky hat, the Ladybug Lady's (red, spotted)
   hat(f, o, c) {
@@ -239,8 +270,9 @@ const ACC = {
     part(ICO1, c(0xe5c66b), [0.1, 0.62, 0.27], [0.055, 0.055, 0.025], [0, 0.2, 0], f.body);
   },
   // a torch in the right paw; the lens glows (its own small mesh so it can be emissive)
-  flashlight(f, o, c) {
+  flashlight(f, _o, c) {
     const arm = f.shoulders[1];
+    if (!arm) return;
     part(CYL8, c(0x3a3f43), [0, -0.3, 0.07], [0.045, 0.2, 0.045], [PI / 2, 0, 0], arm);
     const lens = part(CYL8, M(0xfff1b8, { emissive: 0xffe08a, emissiveIntensity: 1.4 }), [0, -0.3, 0.175], [0.05, 0.02, 0.05], [PI / 2, 0, 0], arm);
     lens.userData.keep = true; lens.castShadow = false;
@@ -299,37 +331,64 @@ const ACC = {
     part(ICO1, col, [0, y, 0.03], [0.31, 0.1, 0.34], [0.12, 0, 0], f.head);
     part(BOX, col, [0, y - 0.04, 0.3], [0.26, 0.02, 0.12], [0.3, 0, 0], f.head);
   },
-};
+} satisfies Record<string, Acc>;
+const ACC_BY_NAME: Record<string, Acc> = ACC;
+
+// Put each accessory on the rig; they keep their own colours (Gran is greyer; her shawl isn't).
+function wear(f: Fit, accessories: AccSpec[] = []) {
+  for (const a of accessories) ACC_BY_NAME[typeof a === 'string' ? a : a[0]]?.(f, typeof a === 'string' ? {} : a[1], C);
+}
 
 // ---------------------------------------------------------------- skinning
 // Bake every part under root into one vertex-coloured SkinnedMesh; each vertex follows its nearest
 // ancestor bone. Parts flagged userData.keep (special materials) stay as they are.
-function skinRig(root, bones) {
+const SHARED_GEOS: THREE.BufferGeometry[] = [ICO0, ICO1, CYL, CYL8, CONE, BOX];
+
+function merged(geos: THREE.BufferGeometry[]) {
+  const geo = mergeGeometries(geos);
+  if (!geo) throw new Error('mergeGeometries: the parts do not share a layout');
+  return geo;
+}
+function pair<T>(list: T[]): [T, T] {
+  const [a, b] = list;
+  if (a === undefined || b === undefined) throw new Error('a rig needs two of these');
+  return [a, b];
+}
+function four<T>(list: T[]): [T, T, T, T] {
+  const [a, b, c, d] = list;
+  if (a === undefined || b === undefined || c === undefined || d === undefined) throw new Error('a rig needs four of these');
+  return [a, b, c, d];
+}
+
+function skinRig(root: THREE.Group, bones: THREE.Bone[]) {
   root.updateMatrixWorld(true);
-  const inv = root.matrixWorld.clone().invert(), index = new Map(bones.map((b, i) => [b, i]));
-  const geos = [], dead = [], m4 = new THREE.Matrix4();
+  const inv = root.matrixWorld.clone().invert(), index = new Map<THREE.Object3D, number>(), m4 = new THREE.Matrix4();
+  bones.forEach((b, i) => index.set(b, i));
+  const geos: THREE.BufferGeometry[] = [], dead: THREE.Mesh[] = [];
   root.traverse((o) => {
-    if (!o.isMesh || o.isSkinnedMesh || o.userData.keep) return;
+    if (!(o instanceof THREE.Mesh) || o instanceof THREE.SkinnedMesh || o.userData.keep) return;
     let b = o.parent; while (b && !index.has(b)) b = b.parent;
-    const bi = index.get(b) ?? 0, mat = o.material;
+    const bi = (b ? index.get(b) : undefined) ?? 0, mat = o.material;
+    if (!(mat instanceof THREE.MeshStandardMaterial)) throw new Error('skinRig: a part has a non-standard material');
     const g = prepGeo(o.geometry, m4.multiplyMatrices(inv, o.matrixWorld), mat.userData.vc ? mat.color : new THREE.Color(0xffffff));
-    const n = g.attributes.position.count, si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
+    const n = g.getAttribute('position').count, si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
     for (let i = 0; i < n; i++) { si[i * 4] = bi; sw[i * 4] = 1; }
     g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
     g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
     geos.push(g); dead.push(o);
   });
-  for (const d of dead) { d.parent.remove(d); if (![ICO0, ICO1, CYL, CYL8, CONE, BOX].includes(d.geometry)) d.geometry.dispose(); }
-  const mesh = new THREE.SkinnedMesh(mergeGeometries(geos), VC);
+  for (const d of dead) { d.parent?.remove(d); if (!SHARED_GEOS.includes(d.geometry)) d.geometry.dispose(); }
+  const mesh = new THREE.SkinnedMesh(merged(geos), VC);
   mesh.castShadow = true; mesh.receiveShadow = true;
   root.add(mesh);
   root.updateMatrixWorld(true);
   mesh.bind(new THREE.Skeleton(bones));
-  mesh.computeBoundingSphere(); mesh.boundingSphere.radius *= 1.6;
+  mesh.computeBoundingSphere();
+  if (mesh.boundingSphere) mesh.boundingSphere.radius *= 1.6;
   return mesh;
 }
 
-function eyes(head, sp, c) {
+function eyes(head: THREE.Bone, sp: Look, c: Mat) {
   const eye = c(0x221f1d), shine = c(0xffffff), ez = sp.eyeZ ?? 0.29, ey = sp.eyeY ?? 0.05, ex = sp.eyeX ?? 0.12, es = sp.eyeS ?? 1;
   for (const sx of [-1, 1]) {
     if (sp.iris) part(ICO1, c(sp.iris), [sx * ex, ey, ez - 0.012], [0.075, 0.075, 0.03], [0, sx * 0.25, 0], head);
@@ -337,29 +396,56 @@ function eyes(head, sp, c) {
     part(ICO0, shine, [sx * ex + 0.015 * es, ey + 0.025 * es, ez + 0.025], [0.014 * es, 0.014 * es, 0.01], [0, 0, 0], head);
   }
 }
-const greyed = (hex, k) => (k ? new THREE.Color(hex).lerp(new THREE.Color(0xc9c5bd), k).getHex() : hex);
+const greyed = (hex: number, k: number) => (k ? new THREE.Color(hex).lerp(new THREE.Color(0xc9c5bd), k).getHex() : hex);
+
+function look(s: Species, species: string): Look {
+  if (s.fur === undefined) throw new Error(`${species} has no fur colour`);
+  return { ...s, fur: s.fur };
+}
+
+/** What a character is built from. `colors` overrides the species' palette; `coat` picks one of its coats. */
+export interface FolkOpts {
+  coat?: number; colors?: Partial<Species>; kid?: boolean; nested?: boolean; grey?: number; scale?: number;
+  accessories?: AccSpec[];
+}
+/** How to pose a rig this frame; every field is optional. */
+export interface AnimOpts {
+  waddle?: number; hop?: boolean; look?: number; wave?: boolean; cheer?: boolean; armsFixed?: boolean; pull?: boolean;
+  nod?: boolean;
+}
+/** The rig of a biped (or a seal): groups you position and turn, bones you may pose. +z is the face. */
+export interface Folk {
+  root: THREE.Group; body: THREE.Bone; head: THREE.Bone; tail: THREE.Bone;
+  legs: [THREE.Bone, THREE.Bone]; arms: [THREE.Bone, THREE.Bone];
+  mesh: THREE.SkinnedMesh; species: string; kid: boolean; phase: number; t: number;
+  /** Set by makeTownsfolk: the portrait key it was made for. */
+  key?: string;
+  animate(dt: number, speed?: number, o?: AnimOpts): void;
+  dispose(): void;
+}
 
 // ---------------------------------------------------------------- the biped rig
-export function makeFolk(species = 'possum', opts = {}) {
-  const base0 = SPECIES[species] || SPECIES.possum;
-  const sp = { ...base0, ...(base0.coats?.[opts.coat ?? 0] || {}), ...opts.colors };
+export function makeFolk(species = 'possum', opts: FolkOpts = {}): Folk {
+  const base0: Species = speciesOf(species) ?? SPECIES.possum;
+  const sp = look({ ...base0, ...base0.coats?.[opts.coat ?? 0], ...opts.colors }, species);
   const { kid = false, nested = false, grey = 0 } = opts;
-  const c = (hex) => C(greyed(hex, grey));
+  const c: Mat = (hex) => C(greyed(hex, grey));
   if (sp.flump) return makeFlumper(species, sp, opts, c);
   const root = new THREE.Group(), body = new THREE.Bone(); root.add(body);
   root.name = species;
   const fur = c(sp.fur), belly = c(sp.belly ?? sp.fur), limbM = c(sp.limb ?? sp.fur), footM = c(sp.foot ?? sp.limb ?? sp.fur);
-  const legs = [], arms = [];
+  const hips: THREE.Bone[] = [], shoulders: THREE.Bone[] = [];
   for (const sx of [-1, 1]) {
     const hip = new THREE.Bone(); hip.position.set(sx * 0.13, 0.34, 0); root.add(hip);
     part(CYL, limbM, [0, -0.15, 0], [0.085, 0.3, 0.085], [0, 0, 0], hip);
     part(ICO0, footM, [0, -0.31, 0.06], sp.webbed ? [0.15, 0.05, 0.2] : [0.1, 0.07, 0.15], [0, 0, 0], hip);
-    legs.push(hip);
+    hips.push(hip);
     const sh = new THREE.Bone(); sh.position.set(sx * 0.27, 0.76, 0); sh.rotation.z = sx * 0.25; body.add(sh);
     if (sp.wing) part(ICO1, c(sp.wing), [sx * 0.02, -0.17, -0.02], [0.07, 0.25, 0.17], [0, 0, 0], sh);
     else { part(CYL, limbM, [0, -0.14, 0], [0.065, 0.28, 0.065], [0, 0, 0], sh); part(ICO0, footM, [0, -0.3, 0], [0.075, 0.075, 0.075], [0, 0, 0], sh); }
-    arms.push(sh);
+    shoulders.push(sh);
   }
+  const legs = pair(hips), arms = pair(shoulders), [legL, legR] = legs, [armL, armR] = arms;
   part(ICO1, fur, [0, 0.58, 0], [0.3, 0.32, 0.26], [0, 0, 0], body);
   part(ICO1, belly, [0, 0.55, 0.1], [0.21, 0.24, 0.18], [0, 0, 0], body);
   const head = new THREE.Bone(); head.position.set(0, 1.08, 0.02); body.add(head);
@@ -370,17 +456,12 @@ export function makeFolk(species = 'possum', opts = {}) {
   const tail = new THREE.Bone(); tail.position.set(0, 0.42, -0.22); body.add(tail);
   sp.tail?.(tail, c, sp);
   sp.back?.(body, c, sp);
-  const f = { root, body, head, hips: legs, shoulders: arms, sp, top: skull[1] };
-  // accessories keep their own colours (Gran is greyer; her shawl isn't)
-  for (const a of opts.accessories || []) {
-    const [name, o] = Array.isArray(a) ? a : [a, {}];
-    ACC[name]?.(f, o || {}, C);
-  }
+  wear({ root, body, head, hips: legs, shoulders: arms, sp, top: skull[1] }, opts.accessories);
   const mesh = skinRig(root, [body, head, tail, ...legs, ...arms]);
   if (kid) { head.scale.setScalar(1.18); head.position.y = 1.02; }
   root.scale.setScalar((opts.scale ?? sp.scale ?? (kid ? 0.55 : 1)) * (nested ? 1 : FOLK_SCALE));
   const base = { legY: 0.34 };
-  const rig = {
+  const rig: Folk = {
     root, body, legs, arms, head, tail, mesh, species, kid, phase: R.rand() * 10, t: R.rand() * 10,
     // speed: ground speed in world units/s; the stride keeps the feet on the ground (kit.gait), and a run leans in,
     // swings wider and bounces. opts: waddle (amplitude), hop, look (head yaw), wave, cheer, armsFixed, pull (hauling a
@@ -393,15 +474,15 @@ export function makeFolk(species = 'possum', opts = {}) {
       const g = o.pull ? { A: 0.95, run: 0, rate: speed > 1e-3 ? (Math.PI * speed) / (2 * L * Math.sin(0.95) * 1.4) : 0 } : gait(speed, L);
       this.phase += dt * g.rate;
       const sw = Math.sin(this.phase) * m;
-      legs[0].rotation.x = sw * g.A; legs[1].rotation.x = -sw * g.A;
+      legL.rotation.x = sw * g.A; legR.rotation.x = -sw * g.A;
       const arm = 0.6 + 0.5 * g.run;
-      if (o.cheer) { arms[0].rotation.x = arms[1].rotation.x = -2.7 + Math.sin(t * 14) * 0.25; }
-      else if (o.wave) { arms[0].rotation.x = -sw * arm; arms[1].rotation.x = -2.6; arms[1].rotation.z = 0.25 + Math.sin(t * 11) * 0.35; }
-      else if (o.pull) { arms[0].rotation.x = -sw * 0.5; arms[1].rotation.x = 0.75; arms[1].rotation.z = 0.15; }
-      else if (!o.armsFixed) { arms[0].rotation.x = -sw * arm; arms[1].rotation.x = sw * arm; arms[1].rotation.z = 0.25; }
+      if (o.cheer) { armL.rotation.x = armR.rotation.x = -2.7 + Math.sin(t * 14) * 0.25; }
+      else if (o.wave) { armL.rotation.x = -sw * arm; armR.rotation.x = -2.6; armR.rotation.z = 0.25 + Math.sin(t * 11) * 0.35; }
+      else if (o.pull) { armL.rotation.x = -sw * 0.5; armR.rotation.x = 0.75; armR.rotation.z = 0.15; }
+      else if (!o.armsFixed) { armL.rotation.x = -sw * arm; armR.rotation.x = sw * arm; armR.rotation.z = 0.25; }
       const hop = o.hop ? Math.abs(Math.sin(t * 9)) * 0.16 : 0;
       body.position.y = Math.abs(Math.sin(this.phase)) * (0.05 + 0.07 * g.run) * m + hop;
-      legs[0].position.y = legs[1].position.y = base.legY + hop;
+      legL.position.y = legR.position.y = base.legY + hop;
       body.rotation.x = o.pull ? 0.3 * m : 0.16 * g.run;
       body.rotation.z = Math.sin(this.phase) * (o.waddle ?? sp.waddle ?? 0.04) * m * (1 - 0.5 * g.run);
       head.rotation.y = o.look ?? Math.sin(t * 0.7 + this.phase * 0.05) * 0.3 * (1 - Math.min(1, speed));
@@ -423,8 +504,8 @@ export function makeFolk(species = 'possum', opts = {}) {
 const FLUMP = {
   chest: [[0, 0.5, 0.14], [0.3, 0.36, 0.3], [-0.35, 0, 0]], neck: [[0, 0.8, 0.22], [0.23, 0.2, 0.22], [0, 0, 0]],
   torso: [[0, 0.3, -0.32], [0.33, 0.28, 0.5], [0.08, 0, 0]], rear: [[0, 0.19, -0.82], [0.2, 0.16, 0.32], [0.18, 0, 0]],
-};
-function makeFlumper(species, sp, opts, c) {
+} satisfies Record<string, [V3, V3, V3]>;
+function makeFlumper(species: string, sp: Look, opts: FolkOpts, c: Mat): Folk {
   const { kid = false, nested = false } = opts;
   const root = new THREE.Group(), body = new THREE.Bone(); root.add(body);
   root.name = species;
@@ -433,15 +514,15 @@ function makeFlumper(species, sp, opts, c) {
   part(ICO1, belly, [0, 0.17, -0.12], [0.27, 0.14, 0.55], [0, 0, 0], body);
   part(ICO1, belly, [0, 0.42, 0.3], [0.2, 0.25, 0.14], [-0.35, 0, 0], body);
   const head = new THREE.Bone(); head.position.set(0, 1.02, 0.28); body.add(head);
-  const skull = sp.skull;
+  const skull = sp.skull ?? [0.34, 0.31, 0.32];
   part(ICO1, c(sp.headC ?? sp.fur), [0, 0, 0], skull, [0, 0, 0], head);
   sp.face(head, c, sp);
   eyes(head, sp, c);
   // spots: on the body's upper half and the head's crown, never over the eyes
   if (sp.spots) {
-    const r = rng(4242), spot = c(sp.spot), P = [FLUMP.chest, FLUMP.torso, FLUMP.torso, FLUMP.rear, FLUMP.neck];
+    const r = rng(4242), spot = c(sp.spot ?? 0), P = [FLUMP.chest, FLUMP.torso, FLUMP.torso, FLUMP.rear, FLUMP.neck];
     for (let i = 0; i < sp.spots; i++) {
-      const [[cx, cy, cz], [rx, ry, rz]] = P[i % P.length], a = r.rand() * PI * 2, u = r.rand() * 0.95 - 0.25;
+      const [[cx, cy, cz], [rx, ry, rz]] = P[i % P.length] ?? FLUMP.chest, a = r.rand() * PI * 2, u = r.rand() * 0.95 - 0.25;
       const q = Math.sqrt(1 - u * u), k = 0.97, sz = (0.025 + r.rand() * 0.035) * (sp.spotS ?? 1);
       part(ICO0, spot, [cx + Math.cos(a) * q * rx * k, cy + u * ry * k, cz + Math.sin(a) * q * rz * k], [sz, sz * 0.7, sz], [r.rand(), r.rand(), 0], body);
     }
@@ -452,25 +533,22 @@ function makeFlumper(species, sp, opts, c) {
     }
   }
   // front flippers (arms): planted forward of the chest; hind flippers (legs): fanned out behind, toes up a little
-  const legs = [], arms = [];
+  const hips: THREE.Bone[] = [], shoulders: THREE.Bone[] = [];
   for (const sx of [-1, 1]) {
     const sh = new THREE.Bone(); sh.position.set(sx * 0.25, 0.34, 0.22); sh.rotation.z = sx * 0.3; body.add(sh);
     part(ICO1, flip, [sx * 0.03, -0.16, 0.06], [0.06, 0.2, 0.12], [0.35, 0, 0], sh);
-    arms.push(sh);
+    shoulders.push(sh);
     const hip = new THREE.Bone(); hip.position.set(sx * 0.07, 0.15, -1.06); body.add(hip);
     part(ICO1, flip, [sx * 0.05, 0.02, -0.17], [0.1, 0.035, 0.2], [-0.25, sx * 0.4, 0], hip);
-    legs.push(hip);
+    hips.push(hip);
   }
+  const legs = pair(hips), arms = pair(shoulders), [armL, armR] = arms;
   const tail = new THREE.Bone(); tail.position.set(0, 0.15, -1.05); body.add(tail);
-  const f = { root, body, head, hips: legs, shoulders: arms, sp, top: skull[1] };
-  for (const a of opts.accessories || []) {
-    const [name, o] = Array.isArray(a) ? a : [a, {}];
-    ACC[name]?.(f, o || {}, C);
-  }
+  wear({ root, body, head, hips: legs, shoulders: arms, sp, top: skull[1] }, opts.accessories);
   const mesh = skinRig(root, [body, head, tail, ...legs, ...arms]);
   if (kid) head.scale.setScalar(1.18);
   root.scale.setScalar((opts.scale ?? (kid ? 0.55 : 1)) * (nested ? 1 : FOLK_SCALE));
-  return {
+  const rig: Folk = {
     root, body, legs, arms, head, tail, mesh, species, kid, phase: R.rand() * 10, t: R.rand() * 10,
     // a flump every 0.6 model units walked (scaled): hunch then lunge; opts as makeFolk (wave lifts a front flipper,
     // cheer both, hop a little belly-bounce, pull leans into it, nod, look)
@@ -488,8 +566,8 @@ function makeFlumper(species, sp, opts, c) {
         a.rotation.x = -lunge * 0.7 + hunch * 0.25;
         a.rotation.z = (i ? 1 : -1) * -0.3;
       }
-      if (o.cheer) { arms[0].rotation.x = arms[1].rotation.x = -1.6 + Math.sin(t * 14) * 0.3; }
-      else if (o.wave) { arms[1].rotation.x = -1.5; arms[1].rotation.z = 0.5 + Math.sin(t * 11) * 0.4; }
+      if (o.cheer) { armL.rotation.x = armR.rotation.x = -1.6 + Math.sin(t * 14) * 0.3; }
+      else if (o.wave) { armR.rotation.x = -1.5; armR.rotation.z = 0.5 + Math.sin(t * 11) * 0.4; }
       legs.forEach((l, i) => { l.rotation.x = hunch * 0.5 - lunge * 0.15; l.rotation.y = (i ? 1 : -1) * Math.sin(t * 1.4) * 0.12 * (1 - m); });
       head.rotation.x = lunge * 0.18 - hunch * 0.05 + (o.nod ? Math.sin(t * 8) * 0.15 : 0);
       head.rotation.y = o.look ?? Math.sin(t * 0.6 + this.phase * 0.05) * 0.35 * (1 - m);
@@ -497,39 +575,41 @@ function makeFlumper(species, sp, opts, c) {
     },
     dispose() { root.parent?.remove(root); disposeTree(root); },
   };
+  return rig;
 }
 
+/** A joey riding on its mother: where it sits on her back (`base` is its height) and which one it is. */
+export type Joey = Folk & { base: number; i: number };
+
 // The prototype's possum mom with two joeys riding on her back.
-export function addJoeys(mom) {
-  mom.joeys = [[-0.2, 0.5, -0.25, 0.35, 0.15], [0.21, 0.44, -0.27, -0.35, -0.15]].map(([x, y, z, ry, rz], i) => {
+export function addJoeys(mom: Folk) {
+  const joeys: Joey[] = ([[-0.2, 0.5, -0.25, 0.35, 0.15], [0.21, 0.44, -0.27, -0.35, -0.15]] satisfies [number, number, number, number, number][]).map(([x, y, z, ry, rz], i) => {
     const j = makeFolk('possum', { kid: true, scale: 0.5, nested: true });
     j.root.position.set(x, y, z); j.root.rotation.set(0.15, ry, rz);
     j.arms.forEach((a) => (a.rotation.x = -1.3));
     j.legs.forEach((l, k) => (l.rotation.x = -0.5 - k * 0.2));
     mom.body.add(j.root);
-    j.base = y; j.i = i;
-    return j;
+    return Object.assign(j, { base: y, i });
   });
   const anim = mom.animate.bind(mom);
   mom.animate = (dt, speed, o) => {
     anim(dt, speed, o);
-    for (const j of mom.joeys) {
+    for (const j of joeys) {
       j.root.position.y = j.base + Math.abs(Math.sin(mom.phase + j.i * 1.3)) * 0.035;
       j.head.rotation.y = Math.sin(mom.t * 1.3 + j.i * 2) * 0.5;
       j.head.rotation.z = Math.sin(mom.t * 2.2 + j.i) * 0.12;
     }
   };
-  return mom;
+  return Object.assign(mom, { joeys });
 }
 
 // A sea otter mom carries her one pup on her chest (SPEC: customer families), cradled in both arms, looking around.
-export function addPup(mom) {
+export function addPup(mom: Folk) {
   const p = makeFolk('otter', { kid: true, scale: 0.46, nested: true });
   p.root.position.set(0, 0.42, 0.27); p.root.rotation.set(-0.35, 0, 0);
   p.arms.forEach((a) => (a.rotation.x = -1.6));
   p.legs.forEach((l) => (l.rotation.x = -1.2));
   mom.body.add(p.root);
-  mom.pup = p;
   const anim = mom.animate.bind(mom);
   mom.animate = (dt, speed, o) => {
     anim(dt, speed, { ...o, armsFixed: true });
@@ -537,11 +617,12 @@ export function addPup(mom) {
     p.root.position.y = 0.42 + Math.abs(Math.sin(mom.phase)) * 0.02;
     p.head.rotation.y = Math.sin(mom.t * 1.1) * 0.45;
   };
-  return mom;
+  return Object.assign(mom, { pup: p });
 }
 
 // ---------------------------------------------------------------- townsfolk
 // Portrait keys and their looks (design §11). Gran and the farmer take the player's species.
+interface Def extends FolkOpts { species: string }
 export const TOWNSFOLK = {
   farmer: (sp) => ({ species: sp, accessories: ['overalls', 'hat'] }),
   gran: (sp) => ({ species: sp, grey: 0.45, accessories: ['glasses', ['shawl', { color: 0x9d86b8 }]] }),
@@ -561,9 +642,10 @@ export const TOWNSFOLK = {
   bigtom: () => ({ species: 'coyote', accessories: [['hat', { color: 0x7a5f4a, band: 0x3a302a }]] }),
   lindqvist: () => ({ species: 'skunk', accessories: [['shawl', { color: 0xa8c6c0 }], 'glasses'] }),
   possumMom: () => ({ species: 'possum' }),
-};
-export function makeTownsfolk(key, playerSpecies = 'possum') {
-  const def = TOWNSFOLK[key]?.(playerSpecies) || { species: SPECIES[key] ? key : 'possum' };
+} satisfies Record<string, (species: string) => Def>;
+const TOWNSFOLK_BY_KEY: Record<string, (species: string) => Def> = TOWNSFOLK;
+export function makeTownsfolk(key: string, playerSpecies = 'possum') {
+  const def = TOWNSFOLK_BY_KEY[key]?.(playerSpecies) ?? { species: speciesOf(key) ? key : 'possum' };
   const f = makeFolk(def.species, def);
   f.key = key;
   return f;
@@ -615,7 +697,7 @@ export function makeWeighmaster() {
   return {
     root, body, chest, head, nose, arm, mesh, kind: 'weighmaster',
     // idle: breathing, nose wiggle, an occasional slow look at the clipboard. hmph(): a toy reaction.
-    update(dt) {
+    update(dt: number) {
       const t = (t0 += dt);
       const br = Math.sin(t * 1.6);
       chest.scale.set(1 + br * 0.02, 1 + br * 0.03, 1 + br * 0.02);
@@ -634,24 +716,40 @@ export function makeWeighmaster() {
 
 // ---------------------------------------------------------------- quadrupeds
 // One builder for Biscuit (the farm dog) and Pamela (the neighbour's goat).
+interface QuadLook {
+  fur: number; belly: number; ear: number; nose: number; len: number; legLen: number; skull: V3; scale: number;
+  ears: 'flop' | 'side'; hoof?: number; horns?: number; beard?: number; goatEyes?: boolean; bell?: number; bandana?: number;
+}
 const QUADS = {
   biscuit: { fur: 0xd6a466, belly: 0xf3e6cf, ear: 0x8a5c38, nose: 0x2b2522, len: 0.4, legLen: 0.34, skull: [0.19, 0.18, 0.2], scale: 0.9, ears: 'flop', bandana: 0xb5543f },
   pamela: { fur: 0xeee8dc, belly: 0xe0d8c8, ear: 0xd9cfbf, nose: 0x8a7a72, hoof: 0x5a524a, len: 0.44, legLen: 0.46, skull: [0.17, 0.19, 0.22], scale: 1, ears: 'side', horns: 0xb8ab94, beard: 0xd9cfbf, goatEyes: true, bell: 0xe5c66b },
-};
-export function makeQuad(kind = 'biscuit') {
-  const q = QUADS[kind] || QUADS.biscuit;
+} satisfies Record<string, QuadLook>;
+const QUADS_BY_KIND: Record<string, QuadLook> = QUADS;
+
+/** How to pose a quadruped this frame. */
+export interface QuadOpts { sit?: boolean; happy?: boolean; look?: number; sniff?: boolean }
+export interface Quad {
+  root: THREE.Group; body: THREE.Bone; head: THREE.Bone; tail: THREE.Bone; legs: [THREE.Bone, THREE.Bone, THREE.Bone, THREE.Bone];
+  mesh: THREE.SkinnedMesh; kind: string; phase: number; t: number;
+  animate(dt: number, speed?: number, o?: QuadOpts): void;
+  trick(name: string, dur?: number): void;
+  dispose(): void;
+}
+export function makeQuad(kind = 'biscuit'): Quad {
+  const q: QuadLook = QUADS_BY_KIND[kind] ?? QUADS.biscuit;
   const root = new THREE.Group(), body = new THREE.Bone(); root.add(body);
   const hipY = q.legLen + 0.06, legLen = q.legLen + 0.04, fur = C(q.fur);
   body.position.set(0, hipY, 0);
   part(ICO1, fur, [0, 0.06, 0], [0.22, 0.21, q.len], [0, 0, 0], body);
   part(ICO1, C(q.belly), [0, -0.01, q.len * 0.45], [0.16, 0.16, 0.2], [0, 0, 0], body);
-  const legs = [];
-  for (const [sx, sz] of [[-1, 1], [1, 1], [-1, -1], [1, -1]]) {
+  const hips: THREE.Bone[] = [];
+  for (const [sx, sz] of [[-1, 1], [1, 1], [-1, -1], [1, -1]] satisfies [number, number][]) {
     const hip = new THREE.Bone(); hip.position.set(sx * 0.12, -0.02, sz * q.len * 0.6); body.add(hip);
     part(CYL, fur, [0, -q.legLen / 2, 0], [0.062, q.legLen, 0.062], [0, 0, 0], hip);
     part(ICO0, C(q.hoof ?? q.belly), [0, -q.legLen - 0.02, 0.025], q.hoof ? [0.06, 0.05, 0.07] : [0.075, 0.05, 0.1], [0, 0, 0], hip);
-    legs.push(hip);
+    hips.push(hip);
   }
+  const legs = four(hips), [leg0, leg1, leg2, leg3] = legs;
   const head = new THREE.Bone(); head.position.set(0, 0.24, q.len * 0.95); body.add(head);
   part(ICO1, fur, [0, -0.13, -0.12], [0.11, 0.17, 0.11], [0.5, 0, 0], head); // neck
   part(ICO1, fur, [0, 0, 0], q.skull, [0, 0, 0], head);
@@ -686,7 +784,7 @@ export function makeQuad(kind = 'biscuit') {
   else taperTube([[0, 0, 0], [0, 0.1, -0.1], [0, 0.24, -0.14], [0, 0.34, -0.1]], 0.05, 0.03, fur, tail);
   const mesh = skinRig(root, [body, head, tail, ...legs]);
   root.scale.setScalar(q.scale * FOLK_SCALE);
-  let trick = null;
+  let trick: { t: number; dur: number; name: string } | null = null, sitK = 0;
   return {
     root, body, legs, head, tail, mesh, kind, phase: 0, t: 0,
     // trot (diagonal pairs) at the ground speed (world units/s), stretching into a bounding run; tail wag.
@@ -694,11 +792,11 @@ export function makeQuad(kind = 'biscuit') {
     animate(dt, speed = 0, o = {}) {
       const t = (this.t += dt), m = Math.min(1, speed * 1.5), g = gait(speed, legLen * root.scale.x, 0.5, 0.9, 5, 10);
       this.phase += dt * g.rate;
-      const sw = Math.sin(this.phase) * m, sit = (this.sit = lerp(this.sit || 0, o.sit && speed < 0.05 ? 1 : 0, Math.min(1, dt * 6)));
-      legs[0].rotation.x = legs[3].rotation.x = sw * g.A;
-      legs[1].rotation.x = legs[2].rotation.x = -sw * g.A;
-      legs[2].rotation.x += sit * -1.3; legs[3].rotation.x += sit * -1.3;
-      legs[0].rotation.x += sit * 0.25; legs[1].rotation.x += sit * 0.25;
+      const sw = Math.sin(this.phase) * m, sit = (sitK = lerp(sitK, o.sit && speed < 0.05 ? 1 : 0, Math.min(1, dt * 6)));
+      leg0.rotation.x = leg3.rotation.x = sw * g.A;
+      leg1.rotation.x = leg2.rotation.x = -sw * g.A;
+      leg2.rotation.x += sit * -1.3; leg3.rotation.x += sit * -1.3;
+      leg0.rotation.x += sit * 0.25; leg1.rotation.x += sit * 0.25;
       body.position.y = hipY + Math.abs(Math.sin(this.phase)) * (0.035 + 0.06 * g.run) * m - sit * 0.12;
       body.rotation.x = -sit * 0.45;
       head.rotation.x = sit * 0.4 + Math.sin(this.phase * 2) * 0.05 * m + (o.sniff ? 0.45 + Math.sin(t * 9) * 0.08 : 0);
@@ -727,10 +825,11 @@ export function makeQuad(kind = 'biscuit') {
 // 'pamela'. opts.species sets the player's species for gran/farmer; opts.size the pixel size (192).
 // The little renderer stays for the session: creating a WebGL context and forcing one lost each cost a visible
 // hitch on phones (tens of ms), and it is only 192 px square. R.dispose() frees it (disposePortraits).
-const cache = new Map();
-let PR = null;
+const cache = new Map<string, string>();
+interface Portraits { r: THREE.WebGLRenderer; scene: THREE.Scene; cam: THREE.OrthographicCamera; size: number; dispose(): void }
+let PR: Portraits | null = null;
 export function disposePortraits() { PR?.dispose(); }
-function portraitRenderer(size) {
+function portraitRenderer(size: number): Portraits {
   if (PR && PR.size === size) return PR;
   PR?.dispose();
   const r = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
@@ -743,21 +842,24 @@ function portraitRenderer(size) {
   PR = { r, scene, cam, size, dispose() { r.dispose(); r.forceContextLoss(); PR = null; } };
   return PR;
 }
-function buildFor(key, species) {
-  if (key === 'weighmaster') return { rig: makeWeighmaster(), size: 2.6, dy: -0.2 };
-  if (QUADS[key]) return { rig: makeQuad(key), size: 1.05, dy: -0.02 };
-  const rig = SPECIES[key] ? makeFolk(key) : makeTownsfolk(key, species);
+/** Something a portrait can pose and frame: its root, the head to centre on, and how big the crop is. */
+interface Subject { root: THREE.Object3D; head: THREE.Object3D; pose(): void; dispose(): void; frame: number; dy: number }
+function buildFor(key: string, species: string): Subject {
+  if (key === 'weighmaster') { const w = makeWeighmaster(); return { root: w.root, head: w.head, pose: () => w.update(0), dispose: w.dispose, frame: 2.6, dy: -0.2 }; }
+  if (QUADS_BY_KIND[key]) { const q = makeQuad(key); return { root: q.root, head: q.head, pose: () => q.animate(0, 0, { look: 0 }), dispose: q.dispose, frame: 1.05, dy: -0.02 }; }
+  const rig = speciesOf(key) ? makeFolk(key) : makeTownsfolk(key, species), k = rig.root.scale.x / FOLK_SCALE;
   // head a little above centre, with room for ears and hats inside the round crop the UI uses
-  return { rig, size: 1.75 * (rig.root.scale.x / FOLK_SCALE), dy: -0.12 * (rig.root.scale.x / FOLK_SCALE) };
+  return { root: rig.root, head: rig.head, pose: () => rig.animate(0, 0, { look: 0 }), dispose: rig.dispose, frame: 1.75 * k, dy: -0.12 * k };
 }
-export function portrait(key, opts = {}) {
+export interface PortraitOpts { species?: string; size?: number }
+export function portrait(key: string, opts: PortraitOpts = {}) {
   const species = opts.species || 'possum', size = opts.size || 192;
   const ck = `${key}|${key === 'gran' || key === 'farmer' ? species : ''}|${size}`;
-  if (cache.has(ck)) return cache.get(ck);
+  const hit = cache.get(ck);
+  if (hit) return hit;
   const P = portraitRenderer(size);
-  const { rig, size: frame, dy } = buildFor(key, species);
-  rig.animate?.(0, 0, { look: 0 });
-  rig.update?.(0);
+  const rig = buildFor(key, species), { frame, dy } = rig;
+  rig.pose();
   rig.root.rotation.y = -0.42;
   P.scene.add(rig.root);
   rig.root.updateMatrixWorld(true);
@@ -777,18 +879,19 @@ export function portrait(key, opts = {}) {
 // Families are drawn with merged, posed geometry per species (adult and kid: 20 InstancedMeshes),
 // with the walk bob and waddle in the instance matrix and blob shadows instead of shadow casting.
 // Possum adults carry their two joeys baked in (design §7: joeys ride on mom's back); sea otters their pup on the chest.
-const crowdGeoCache = new Map();
-export function crowdGeometry(species, kid = false, coat = 0) {
+const crowdGeoCache = new Map<string, THREE.BufferGeometry>();
+export function crowdGeometry(species: string, kid = false, coat = 0) {
   const k = species + (coat ? `#${coat}` : '') + (kid ? ':kid' : '');
-  if (crowdGeoCache.has(k)) return crowdGeoCache.get(k);
+  const cached = crowdGeoCache.get(k);
+  if (cached) return cached;
   const rig = makeFolk(species, { kid, coat });
   if (species === 'possum' && !kid) addJoeys(rig);
   if (species === 'otter' && !kid) addPup(rig);
   rig.animate(0, 0, { look: 0 });
   rig.root.updateMatrixWorld(true);
-  const geos = [], v = new THREE.Vector3();
+  const geos: THREE.BufferGeometry[] = [], v = new THREE.Vector3();
   rig.root.traverse((o) => {
-    if (!o.isSkinnedMesh) return;
+    if (!(o instanceof THREE.SkinnedMesh)) return;
     o.skeleton.update();
     const src = o.geometry, n = src.attributes.position.count, pos = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) { o.getVertexPosition(i, v); v.applyMatrix4(o.matrixWorld); pos.set([v.x, v.y, v.z], i * 3); }
@@ -799,19 +902,21 @@ export function crowdGeometry(species, kid = false, coat = 0) {
     g.computeVertexNormals();
     geos.push(g);
   });
-  const geo = mergeGeometries(geos);
+  const geo = merged(geos);
   geo.userData.shared = true;
   rig.dispose();
   crowdGeoCache.set(k, geo);
   return geo;
 }
-export function createCrowd(K, { adults = 24, kids = 48 } = {}) {
+/** What a crowd member may override: her coat, her height, her size, a bounce, her waddle, and whether she casts a blob. */
+export interface CrowdOpts { coat?: number; scale?: number; y?: number; hop?: boolean; noBlob?: boolean; waddle?: number }
+export function createCrowd(K: Kit, { adults = 24, kids = 48 } = {}) {
   const group = new THREE.Group(); group.name = 'crowd'; K.scene.add(group);
-  const meshes = {}, counts = {};
-  for (const sp of SPECIES_KEYS) for (let coat = 0; coat < (SPECIES[sp].coats?.length || 1); coat++) for (const kid of [false, true]) {
+  const meshes: Record<string, THREE.InstancedMesh> = {}, counts = new Map<string, number>();
+  for (const sp of SPECIES_KEYS) for (let coat = 0; coat < (speciesOf(sp)?.coats?.length || 1); coat++) for (const kid of [false, true]) {
     const key = sp + (coat ? `#${coat}` : '') + (kid ? ':kid' : ''), im = new THREE.InstancedMesh(crowdGeometry(sp, kid, coat), VC, kid ? kids : adults);
     im.castShadow = false; im.receiveShadow = true; im.frustumCulled = false; im.count = 0; im.visible = false;
-    meshes[key] = im; counts[key] = 0; group.add(im);
+    meshes[key] = im; counts.set(key, 0); group.add(im);
   }
   const blobGeo = new THREE.CircleGeometry(1, 12).rotateX(-PI / 2);
   const blobMat = new THREE.MeshBasicMaterial({ color: 0x2a2620, transparent: true, opacity: 0.2, depthWrite: false });
@@ -822,25 +927,26 @@ export function createCrowd(K, { adults = 24, kids = 48 } = {}) {
   let nb = 0;
   return {
     group, meshes,
-    begin() { for (const k in counts) counts[k] = 0; nb = 0; },
+    begin() { for (const k of counts.keys()) counts.set(k, 0); nb = 0; },
     // one family member. heading: radians (0 faces +z). phase: pi a step, advancing with the distance walked (the bob
     // and the side-to-side waddle keep time with the ground); with opts.hop each pi is a bounce instead. speed (u/s) sizes
     // the bob, so a figure standing still is still. A seal flumps instead (a hunch, then a lunge: pitch and stretch);
     // opts.coat picks her coat, opts.y sets the height outright (swimming), opts.noBlob drops the shadow.
-    put(species, kid, x, z, heading = 0, phase = 0, speed = 0, opts = {}) {
-      const key = species + (opts.coat ? `#${opts.coat}` : '') + (kid ? ':kid' : ''), im = meshes[key];
-      if (!im || counts[key] >= im.instanceMatrix.count) return;
-      const m = Math.min(1, speed * 2), b = Math.abs(Math.sin(phase)), k = opts.scale ?? 1, ground = K.world?.heightAt(x, z) ?? 0;
-      const flump = SPECIES[species]?.flump;
+    put(species: string, kid: boolean, x: number, z: number, heading = 0, phase = 0, speed = 0, opts: CrowdOpts = {}) {
+      const key = species + (opts.coat ? `#${opts.coat}` : '') + (kid ? ':kid' : ''), im = meshes[key], n = counts.get(key) ?? 0;
+      if (!im || n >= im.instanceMatrix.count) return;
+      const m = Math.min(1, speed * 2), b = Math.abs(Math.sin(phase)), k = opts.scale ?? 1, ground = K.world.heightAt(x, z);
+      const sp = speciesOf(species), flump = sp?.flump;
+      counts.set(key, n + 1);
       if (flump) {
         const sw = Math.sin(phase) * m, lunge = Math.max(0, sw), hunch = Math.max(0, -sw);
         const y = opts.y ?? ground + lunge * 0.06 + (opts.hop ? b * 0.1 : 0);
         e.set(-lunge * 0.14 + hunch * 0.05, heading, 0, 'YXZ');
-        im.setMatrixAt(counts[key]++, m4.compose(p.set(x, y, z), q.setFromEuler(e), s.set(k, k * (1 + hunch * 0.1), k * (1 - hunch * 0.1 + lunge * 0.04))));
+        im.setMatrixAt(n, m4.compose(p.set(x, y, z), q.setFromEuler(e), s.set(k, k * (1 + hunch * 0.1), k * (1 - hunch * 0.1 + lunge * 0.04))));
       } else {
         const y = opts.y ?? ground + (opts.hop ? b * 0.18 : b * (kid ? 0.08 : 0.06) * m);
-        e.set(0, heading, Math.sin(phase) * (opts.waddle ?? SPECIES[species]?.waddle ?? 0.05) * m * (opts.hop ? 0.4 : 1), 'YXZ');
-        im.setMatrixAt(counts[key]++, m4.compose(p.set(x, y, z), q.setFromEuler(e), s.setScalar(k)));
+        e.set(0, heading, Math.sin(phase) * (opts.waddle ?? sp?.waddle ?? 0.05) * m * (opts.hop ? 0.4 : 1), 'YXZ');
+        im.setMatrixAt(n, m4.compose(p.set(x, y, z), q.setFromEuler(e), s.setScalar(k)));
       }
       if (!opts.noBlob && nb < blobs.instanceMatrix.count) {
         const w = kid ? 0.26 : 0.42, back = flump ? (kid ? 0.25 : 0.45) : 0;   // a seal's shadow is long, under her body
@@ -850,9 +956,9 @@ export function createCrowd(K, { adults = 24, kids = 48 } = {}) {
       s.set(1, 1, 1);
     },
     end() {
-      for (const k in meshes) { const im = meshes[k]; im.count = counts[k]; im.visible = counts[k] > 0; im.instanceMatrix.needsUpdate = true; }
+      for (const [k, im] of Object.entries(meshes)) { const n = counts.get(k) ?? 0; im.count = n; im.visible = n > 0; im.instanceMatrix.needsUpdate = true; }
       blobs.count = nb; blobs.visible = nb > 0; blobs.instanceMatrix.needsUpdate = true;
     },
-    dispose() { K.scene.remove(group); blobGeo.dispose(); blobs.material.dispose(); for (const im of Object.values(meshes)) im.dispose(); },
+    dispose() { K.scene.remove(group); blobGeo.dispose(); blobMat.dispose(); for (const im of Object.values(meshes)) im.dispose(); },
   };
 }
