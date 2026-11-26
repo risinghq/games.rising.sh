@@ -64,6 +64,8 @@ export interface Api {
 // Method syntax keeps parameters bivariant, so a sheet whose arg is a row number still registers as SheetDef.
 export interface SheetDef<A = unknown> {
   title(s: State, arg: A): string;
+  /** Cache slot a sheet's own build/update use to skip redraws. */
+  _sig?: string | null;
   eyebrow?(s: State, arg: A): string | null | undefined;
   build(el: HTMLElement, s: State, arg: A, api: Api): void;
   /** Runs every frame while open: diff against what you drew. */
