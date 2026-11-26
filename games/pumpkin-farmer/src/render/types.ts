@@ -33,6 +33,8 @@ export interface RendererCam {
   rotate?(a?: number, ms?: number): void;
   zoomFor?(fit: number): number;
   readonly zoom?: number;
+  /** performance.now() of the user's last camera touch (set by input). */
+  readonly touchedAt?: number;
   readonly target?: THREE.Vector3;
   readonly azimuth?: number;
 }
@@ -71,6 +73,8 @@ export interface LocalFx {
   'cast': { who: string; act: string; secs?: number };
   'hunt/start': { row: number; hunt: Hunt };
   'hunt/end': object;
+  /** The carved face, drawn on a mask canvas in the winter UI (ui/winter.js). */
+  'winter/carve': { canvas: HTMLCanvasElement };
 }
 type LocalFxType = keyof LocalFx;
 /** What R.fx and every view hear: the sim's out-events and the UI's local effects. */
