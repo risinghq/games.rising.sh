@@ -10,14 +10,15 @@
 // bolt), mischief/whistle (Biscuit runs to Pamela and walks her home), mischief/leave, event 'kelp' (the otter delivers).
 // Tap: each visitor is a hitbox (kind 'visitor'): tapping the seal is the same as tapping her ✦ (ui/mischief.js).
 import * as THREE from 'three';
-import { PI, clamp, lerp, damp, part, C, M, ICO0, ICO1, CYL, BOX, mergeLocal, pool, hideAt } from './kit.js';
+import { PI, lerp, damp, part, C, M, ICO0, CYL, BOX, mergeLocal, pool, hideAt } from './kit.js';
 import { makeFolk, makeQuad, addJoeys, addPup } from './folk.js';
 import { MISCHIEF_ENTRY as ENTRY, SWARM_SPOTS, PLACES } from '../sim/layout.js';
 import { COATS } from '../sim/lines-mischief.js';
-import type { State, OutEvent } from '../sim/types.js';
-import type { Kit } from './types.js';
-import { MischiefPamelaVisit } from '../sim/state.js';
-import { MischiefVisit } from '../sim/state.js';
+import type { State } from '../sim/types.js';
+import type { Pt } from '../sim/layout.js';
+import type { Kit, FxEvent } from './types.js';
+import type { AnimOpts, QuadOpts, Joey } from './folk.js';
+import type { MischiefPamelaVisit, MischiefVisit } from '../sim/state.js';
 const LOOK_DELAY = 0.6;                                 // the camera's glide (ui/mischief.js) before the visitor's animation
 const HERD_FROM = 8;                                    // a whistled Biscuit runs in from at most this far (just outside the frame)
 const SPEED = { walk: 1.1, trot: 2.2, run: 4.5, float: 0.9, flump: 0.7 };
@@ -25,12 +26,30 @@ const turnTo = (o: THREE.Group<THREE.Object3DEventMap>, a: number, k: number) =>
 const TEA = 0xefe8da;                                   // a tea towel's cream
 const WATER_Y = -0.88;                                 // the sea's surface (world.js)
 
+/** A folk or a quad: the members every rig in this view needs (a quad has no arms). */
+interface Rig {
+  root: THREE.Group; body: THREE.Object3D; head: THREE.Object3D; tail: THREE.Object3D;
+  legs: readonly THREE.Object3D[]; arms?: readonly THREE.Object3D[]; joeys?: Joey[];
+  animate(dt: number, speed?: number, o?: AnimOpts & QuadOpts): void;
+  trick?(name: string, dur?: number): void;
+  dispose(): void;
+}
+interface ActorOpts { to?: Pt; speed?: number }
+/** A visitor mid-visit: strolling in, posed, or walking out (render-only timing, see the header note). */
+interface Actor {
+  key: string; rig: Rig; rigKey?: string;
+  pos: THREE.Vector3; from: Pt; spot: { x: number; z: number; day?: number }; to: Pt; flee?: Pt;
+  state: 'in' | 'here' | 'out'; speed: number;
+  look: number; k: number; t: number; vel: number;
+  tx?: number; tz?: number; joeys?: Joey[] | null; opts: ActorOpts;
+}
+
 export default function createMischiefView(K: Kit) {
   const { scene, hit, fx } = K;
   const root = new THREE.Group(); root.name = 'mischief'; scene.add(root);
   const ground = (x: number, z: number) => K.world?.heightAt?.(x, z) ?? 0;
-  const rigs = {};                                      // built lazily, kept
-  const actors = new Map();                             // key -> actor
+  const rigs: Record<string, Rig> = {};                 // built lazily, kept
+  const actors = new Map<string, Actor>();              // key -> actor
   let biscuitBy: string|null = null;                                 // who holds Biscuit right now ('dig' | 'seal' | 'otter' | 'herd')
 
   // ------------------------------------------------------------ props
@@ -56,20 +75,21 @@ export default function createMischiefView(K: Kit) {
   const beeM = new THREE.Matrix4(), beeQ = new THREE.Quaternion(), beeP = new THREE.Vector3(), beeS = new THREE.Vector3();
 
   // ------------------------------------------------------------ rigs
-  function rig(key: string) {
-    if (rigs[key]) return rigs[key];
-    let r;
-    if (key.startsWith('seal')) r = makeFolk('seal', { coat: Math.max(0, COATS.indexOf(key.split(':')[1])) });
-    else if (key === 'otter') r = addPup(makeFolk('otter'));
-    else if (key === 'possum') r = addJoeys(makeFolk('possum'));
-    else if (key === 'pamela') r = makeQuad('pamela');
-    else if (key === 'skunk') r = makeFolk('skunk');
-    else if (key.startsWith('kit')) r = makeFolk('skunk', { kid: true });
+  function rig(key: string): Rig {
+    const kept = rigs[key];
+    if (kept) return kept;
+    const r: Rig =
+      key.startsWith('seal') ? makeFolk('seal', { coat: Math.max(0, COATS.findIndex((c) => c === key.split(':')[1])) })
+      : key === 'otter' ? addPup(makeFolk('otter'))
+      : key === 'possum' ? addJoeys(makeFolk('possum'))
+      : key === 'pamela' ? makeQuad('pamela')
+      : key === 'skunk' ? makeFolk('skunk')
+      : makeFolk('skunk', { kid: true });
     r.root.visible = false; root.add(r.root);
     return (rigs[key] = r);
   }
   // An actor walks in from `from` to its spot, stays, and walks out to `to` when its visit ends.
-  function actor(key: string|number|undefined, rigKey: string|number|undefined, from: { x: any; z: any; }, spot: { x: any; z: any; day?: any; }, opts = {}) {
+  function actor(key: string, rigKey: string, from: Pt, spot: { x: number; z: number; day?: number }, opts: ActorOpts = {}): Actor {
     let a = actors.get(key);
     if (a) { a.spot = spot; return a; }
     const r = rig(rigKey);
@@ -88,7 +108,7 @@ export default function createMischiefView(K: Kit) {
     if (key === 'possum') joeysOn(a);                     // she comes back to life and the joeys climb back on
   }
   // step toward (x, z) at speed; true on arrival
-  function step(a: { tx: any; tz: any; pos: { x: number; z: number; }; vel: number; rig: { root: any; }; }, x: number, z: number, speed: number, dt: number) {
+  function step(a: Actor, x: number, z: number, speed: number, dt: number) {
     a.tx = x; a.tz = z;                                   // (where she's headed: a ✦ tap brings her straight there, fxEvent)
     const dx = x - a.pos.x, dz = z - a.pos.z, d = Math.hypot(dx, dz);
     if (d < 0.04) { a.vel = lerp(a.vel, 0, damp(dt, 10)); return true; }
@@ -98,7 +118,7 @@ export default function createMischiefView(K: Kit) {
     turnTo(a.rig.root, Math.atan2(dx, dz), damp(dt, 8));
     return false;
   }
-  const place = (a: { rig: { root: { position: { set: (arg0: any,arg1: number,arg2: any) => any; }; }; }; pos: { x: any; z: any; }; }, y = 0) => a.rig.root.position.set(a.pos.x, ground(a.pos.x, a.pos.z) + y, a.pos.z);
+  const place = (a: Actor, y = 0) => a.rig.root.position.set(a.pos.x, ground(a.pos.x, a.pos.z) + y, a.pos.z);
 
   // ------------------------------------------------------------ Biscuit (cast.js lends him: K.cast.hold)
   const dog = { pos: new THREE.Vector3(), vel: 0, goal: null, sit: false };
@@ -109,7 +129,7 @@ export default function createMischiefView(K: Kit) {
     return b;
   }
   function freeBiscuit(by: string) { if (biscuitBy === by) { biscuitBy = null; K.cast?.hold('biscuit', false); } }
-  function dogTo(x: number, z: number, dt: number, speed = SPEED.trot, opts = {}) {
+  function dogTo(x: number, z: number, dt: number, speed = SPEED.trot, opts: { face?: Pt; sit?: boolean; happy?: boolean; sniff?: boolean } = {}) {
     const b = K.cast.biscuit, dx = x - dog.pos.x, dz = z - dog.pos.z, d = Math.hypot(dx, dz);
     let v = 0;
     if (d > 0.05) { const s = Math.min(d, speed * dt); dog.pos.x += (dx / d) * s; dog.pos.z += (dz / d) * s; v = s / Math.max(dt, 1e-4); turnTo(b.root, Math.atan2(dx, dz), damp(dt, 10)); }
@@ -121,12 +141,13 @@ export default function createMischiefView(K: Kit) {
   }
 
   // ------------------------------------------------------------ per frame
-  let herd: { off?: any; t: any; met?: any; x?: number|null|undefined; z?: number|null|undefined; }|null = null;                                      // Biscuit walking Pamela home: { t, x, z }
+  let herd: { off?: boolean; t: number; met?: number; x?: number | null; z?: number | null } | null = null;       // Biscuit walking Pamela home: { t, x, z }
   const digLook = { look: -1 };                         // the tin's lid after a ✦ tap
-  let courier: { t: any; }|null = null;                                   // the otter floating in with a kelp bundle: { t }
+  let courier: { t: number } | null = null;                                   // the otter floating in with a kelp bundle: { t }
   let lastSig = '';
   let today = 0;
-  function sync(s: State, dt: number, t: number) {
+  const LOOK_KEY: Record<string, string> = { seal_haulout: 'seal', otter_look: 'otter', possum_nap: 'possum', skunk_shade: 'skunk', pamela: 'pamela' };
+  function sync(s: State | null, dt: number, t: number) {
     const m = s?.mischief, grow = s?.clock?.phase === 'grow';
     today = s?.clock?.day ?? 0;
     const v = grow ? m?.visit : null, pv = grow ? m?.pamela?.visit : null;
@@ -176,9 +197,9 @@ export default function createMischiefView(K: Kit) {
     }
   }
   // afloat: on the sea's surface (world.js: y -0.88), or on the sand where the beach rises above it
-  const float = (a: { rig: { root: { position: { set: (arg0: any,arg1: number,arg2: any) => any; }; }; }; pos: { x: number; z: any; }; }, t: number) => a.rig.root.position.set(a.pos.x, Math.max(ground(a.pos.x, a.pos.z), WATER_Y) - 0.06 + Math.sin(t * 1.3 + a.pos.x) * 0.04, a.pos.z);
+  const float = (a: Actor, t: number) => a.rig.root.position.set(a.pos.x, Math.max(ground(a.pos.x, a.pos.z), WATER_Y) - 0.06 + Math.sin(t * 1.3 + a.pos.x) * 0.04, a.pos.z);
   // how far through the visitor's one animation after a ✦ tap (0 .. 1), or -1
-  function lookK(a: { look: any; }, dt: any, dur = 1.6) {
+  function lookK(a: { look: number }, dt: number, dur = 1.6) {
     if (a.look < 0) return -1;
     a.look += dt;
     if (a.look < LOOK_DELAY) return -1;
@@ -188,7 +209,7 @@ export default function createMischiefView(K: Kit) {
   }
 
   // ---- Biscuit digs up the tin, and sits by it until you look
-  function digSync(v: MischiefVisit, dt: any) {
+  function digSync(v: MischiefVisit, dt: number) {
     const fresh = biscuitBy !== 'dig', b = takeBiscuit('dig');
     if (!b) return;
     // (he's been at it since dawn: the ✦ goes up with the dig, so a tap at once must find him there, not trotting over)
@@ -200,10 +221,10 @@ export default function createMischiefView(K: Kit) {
     lid.rotation.z = k >= 0 ? k * 2.5 : 0;
   }
   // ---- the seal: flumps up out of the sea to her spot, lies down; Biscuit sits a metre off, guarding her
-  function sealSync(v: MischiefVisit, dt: any) {
+  function sealSync(v: MischiefVisit, dt: number) {
     const key = `seal:${v.coat || 'silver'}`;
     let a = actors.get('seal');
-    if (a && a.rigKey !== key) { a.rig.root.visible = false; actors.delete('seal'); a = null; }
+    if (a && a.rigKey !== key) { a.rig.root.visible = false; actors.delete('seal'); a = undefined; }
     if (!a) { a = actor('seal', key, ENTRY.seal.from, v, { speed: SPEED.flump }); a.rigKey = key; }
     const here = a.state === 'here' || step(a, v.x, v.z, a.speed, dt);
     if (here) a.state = 'here';
@@ -236,15 +257,15 @@ export default function createMischiefView(K: Kit) {
     place(a, here ? 0.18 * a.k : 0);
     r.root.rotation.z = (PI / 2) * a.k;
     r.animate(dt, here ? 0 : a.vel, here ? { armsFixed: true } : {});
-    if (here) { r.legs.forEach((l: { rotation: { x: number; }; }) => (l.rotation.x = 0.2)); r.arms.forEach((x: { rotation: { x: number; }; }) => (x.rotation.x = -0.3)); }
+    if (here) { r.legs.forEach((l) => (l.rotation.x = 0.2)); r.arms?.forEach((x) => (x.rotation.x = -0.3)); }
     const k = lookK(a, dt, 2);
     for (const [i, j] of (a.joeys || []).entries()) {
       j.animate(dt, 0, { wave: i === 0 && k >= 0, look: Math.sin(a.t += dt * 0.5) * 0.4 });
     }
   }
-  function joeysOff(a: { rig: any; joeys: any; pos: { x: number; z: number; }; }) {
+  function joeysOff(a: Actor) {
     const mom = a.rig;
-    a.joeys = mom.joeys.map((j: { root: THREE.Object3D<THREE.Object3DEventMap>; }, i: number) => {
+    a.joeys = (mom.joeys || []).map((j, i) => {
       root.attach(j.root);
       j.root.position.set(a.pos.x + 0.35 + i * 0.32, ground(a.pos.x, a.pos.z), a.pos.z + 0.45 - i * 0.1);
       j.root.rotation.set(0, PI + 0.3 - i * 0.6, 0);
@@ -252,13 +273,13 @@ export default function createMischiefView(K: Kit) {
       return j;
     });
   }
-  function joeysOn(a: { joeys: null; rig: { body: { add: (arg0: any) => void; }; }; }) {
+  function joeysOn(a: Actor) {
     for (const j of a.joeys || []) { a.rig.body.add(j.root); j.root.position.set(j.i ? 0.21 : -0.2, j.base, j.i ? -0.27 : -0.25); j.root.rotation.set(0.15, j.i ? -0.35 : 0.35, j.i ? -0.15 : 0.15); j.root.scale.setScalar(0.5); }
     a.joeys = null;
   }
   // ---- the skunks: a mom and two kits, single file from the west fence, lie down in the sail's shadow, tails up
   function skunkSync(v: MischiefVisit, dt: number) {
-    const fam = [['skunk', 0, 0], ['kit1', 0.55, 0.35], ['kit2', -0.5, 0.42]];
+    const fam: [string, number, number][] = [['skunk', 0, 0], ['kit1', 0.55, 0.35], ['kit2', -0.5, 0.42]];
     fam.forEach(([key, dx, dz], i) => {
       const a = actors.get(key) || actor(key, key === 'skunk' ? 'skunk' : key, { x: ENTRY.skunks.from.x - i * 0.9, z: ENTRY.skunks.from.z }, v, { speed: SPEED.walk });
       const here = step(a, v.x + dx, v.z + dz, a.speed, dt);
@@ -271,7 +292,7 @@ export default function createMischiefView(K: Kit) {
     });
   }
   // ---- Pamela: hops the north fence, ambles to her spot, grazes (head down, bell tinkling)
-  function pamelaSync(v: MischiefPamelaVisit, dt: any) {
+  function pamelaSync(v: MischiefPamelaVisit, dt: number) {
     const a = actors.get('pamela') || actor('pamela', 'pamela', ENTRY.pamela.from, v, { speed: SPEED.trot });
     a.spot = v;
     const here = step(a, v.x, v.z, a.state === 'here' ? 0.5 : a.speed, dt);
@@ -282,9 +303,10 @@ export default function createMischiefView(K: Kit) {
   // ---- Biscuit walks Pamela home (a whistle), the payoff of "my dog's a hero": she grazes on, unbothered, while he comes
   // sprinting into the camera's frame, runs a lap round her, and they trot to the fence together (sync keeps her here
   // until then). From far off he enters from just outside the close frame, so the whole thing takes ~4 s on screen.
-  function herdSync(dt: any) {
+  function herdSync(dt: number) {
     const a = actors.get('pamela'), b = takeBiscuit('herd');
     if (!a || !b) { herd = null; freeBiscuit('herd'); return; }
+    if (!herd) return;
     if (herd.t === 0) {
       const dx = dog.pos.x - a.pos.x, dz = dog.pos.z - a.pos.z, d = Math.hypot(dx, dz);
       if (d > HERD_FROM) dog.pos.set(a.pos.x + (dx / d) * HERD_FROM, 0, a.pos.z + (dz / d) * HERD_FROM);
@@ -308,6 +330,7 @@ export default function createMischiefView(K: Kit) {
   }
   // ---- the otter delivers kelp (every kelp event): she floats in to the beach, pats a bundle onto the sand, floats off
   function courierSync(dt: number) {
+    if (!courier) return;
     courier.t += dt;
     const k = PLACES.kelp, a = actors.get('courier') || actor('courier', 'otter', ENTRY.otter.from, { x: k.x + 1.6, z: k.z }, { speed: SPEED.float, to: ENTRY.otter.to });
     if (courier.t > 7 && a.state !== 'out') leave('courier');
@@ -318,23 +341,24 @@ export default function createMischiefView(K: Kit) {
     if (courier.t > 12) courier = null;
   }
 
-  function fxEvent(ev: OutEvent) {
+  function fxEvent(ev: FxEvent) {
     if (ev.type === 'mischief/look') {
-      const key = { seal_haulout: 'seal', otter_look: 'otter', possum_nap: 'possum', skunk_shade: 'skunk', pamela: 'pamela' }[ev.id];
+      const key = LOOK_KEY[ev.id];
       for (const k of key === 'skunk' ? ['skunk', 'kit1', 'kit2'] : [key]) {
+        if (k == null) continue;
         const a = actors.get(k);
         if (!a) continue;
         a.look = 0;
         // the ✦ goes up as she sets off, so a quick tap can beat her there (Pamela trots ~9 s from the fence): the camera's
         // glide brings her to her spot, so the close frame has her in it, doing her thing (rulings R4)
-        if (a.state === 'in' && a.tx != null) { fx.dust?.(a.pos.x, a.pos.z); a.pos.set(a.tx, 0, a.tz); a.vel = 0; }
+        if (a.state === 'in' && a.tx != null && a.tz != null) { fx.dust?.(a.pos.x, a.pos.z); a.pos.set(a.tx, 0, a.tz); a.vel = 0; }
       }
       if (ev.id === 'biscuit_dig') digLook.look = 0;
       if (ev.id === 'biscuit_dig') setTimeout(() => fx.sparkle?.(ev.x, 0.5, ev.z, 10), LOOK_DELAY * 1000);
       if (ev.id === 'swarm_look') setTimeout(() => fx.sparkle?.(ev.x, 2.8, ev.z, 12), LOOK_DELAY * 1000);
       if (ev.id === 'biscuit_dig' && K.cast?.biscuit) setTimeout(() => K.cast.biscuit.trick('hop'), LOOK_DELAY * 1000);
       // Pamela looks up from the bramble and tosses her head: "Mehh." (her bubble says it)
-      if (ev.id === 'pamela') setTimeout(() => actors.get('pamela')?.rig.trick('bark', 0.9), LOOK_DELAY * 1000);
+      if (ev.id === 'pamela') setTimeout(() => actors.get('pamela')?.rig.trick?.('bark', 0.9), LOOK_DELAY * 1000);
     }
     if (ev.type === 'mischief/startle') {
       for (let i = 0; i < 7; i++) fx.dust?.(ev.x + Math.cos(i) * 0.6, ev.z + Math.sin(i) * 0.6, 0x86b45a);

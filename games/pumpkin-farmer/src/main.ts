@@ -5,10 +5,11 @@
 //   ?debug     overlay (phase, clock, events, FPS)      ?mute  no sound      ?render=stub  the dev test renderer
 import { createApp, loadSettings } from './ui/app.js';
 import { jumpTo } from './sim/bots.js';
+import type { Action } from './sim/types.js';
 
 const q = new URLSearchParams(location.search);
 const params = {
-  seed: q.has('seed') ? (+q.get('seed') >>> 0) || 1 : undefined,
+  seed: q.has('seed') ? (+(q.get('seed') ?? '') >>> 0) || 1 : undefined,
   new: q.has('new'), jump: q.get('jump') || null, speed: q.get('speed'), debug: q.has('debug'), mute: q.has('mute'),
   render: q.get('render') || 'game',
 };
@@ -20,6 +21,7 @@ if (touch) document.body.classList.add('touch');
 
 async function makeRenderer() {
   const container = document.getElementById('stage');
+  if (!container) throw new Error('#stage is missing');
   const stub = async () => (await import('../dev/stub-render.js')).createRenderer({ container, phone, settings });
   if (params.render === 'stub') return stub();
   try {
@@ -34,17 +36,17 @@ async function makeRenderer() {
 
 const R = await makeRenderer();
 const app = createApp({ R, settings, params });
-window.qsc = {
+Object.assign(window, { qsc: {
   app, api: app.api, R, jumpTo,
   get game() { return app.game; },
   get s() { return app.game?.s; },
-  dispatch: (a: any) => app.api.dispatch(a),
+  dispatch: (a: Action) => app.api.dispatch(a),
   advanceDays: (n = 1) => app.game?.advanceDays(n),
   advanceTicks: (n = 1) => app.game?.advanceTicks(n),
-  setSpeed: (speed: any) => app.api.dispatch({ type: 'clock/speed', speed }),
+  setSpeed: (speed: number) => app.api.dispatch({ type: 'clock/speed', speed }),
   // run the balanced bot to a target ('y1-aug1', 'y1-weighoff', ...) and hand over
-  jump(target: any) { if (!app.game) app.startNow(); jumpTo(app.game.s, target); return app.game.s.clock; },
-};
-if (params.jump || params.new) app.startNow();
-else app.showTitleScreen();
-app.start();
+  jump(target: string) { const g = app.game ?? app.startNow?.(); if (!g) return null; jumpTo(g.s, target); return g.s.clock; },
+} });
+if (params.jump || params.new) app.startNow?.();
+else app.showTitleScreen?.();
+app.start?.();

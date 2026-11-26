@@ -91,7 +91,7 @@ export interface FabDef {
 }
 export type TapHandler = (hit: Hit, api: Api, e: PointerEvent) => void;
 export interface PinDef {
-  id: string; icon: string; label?: string;
+  id: string; icon: string; label?: string; cls?: string;
   when(s: State): boolean;
   pos(s: State): At | null;
   onTap(api: Api): void;

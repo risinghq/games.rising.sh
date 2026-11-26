@@ -13,7 +13,7 @@ const GAP = 1.4;                                  // s between news pills
 const STALE = 12;                                 // s a queued news pill may wait before it is old news
 const maxShown = () => (innerWidth >= T.ui.desktop ? 3 : 2);
 
-export function createToasts(api: Api, { hold = () => false } = {}) {
+export function createToasts(api: Api, { hold = () => false }: { hold?: () => boolean } = {}) {
   const root = $('#toasts');
   const queue: { t: number; }[] = [];
   let lastNotable = -1e9, lastNews = -1e9;

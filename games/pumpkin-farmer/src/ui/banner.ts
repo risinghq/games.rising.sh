@@ -15,7 +15,7 @@ import type { Api } from './types.js';
 const B = T.ui.banner;
 export const bannerMs = (o: { ms: any; big: any; line: string|any[]; }) => Math.min(B.maxMs, (o.ms ?? (o.big ? B.bigMs : B.ms)) + (o.line ? o.line.length * B.perChar : 0));
 
-export function createBanner(api: Api, { touchedRecently = () => false } = {}) {
+export function createBanner(api: Api, { touchedRecently = () => false }: { touchedRecently?: () => boolean } = {}) {
   const root = el('div', { id: 'banner', 'aria-live': 'polite' });
   $('#game-ui').append(root);
   const queue: any[] = [];

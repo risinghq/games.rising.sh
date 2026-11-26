@@ -3,7 +3,7 @@
 // cadence, settings and the title / new farm / continue flows, and exposes `api` to the slice UIs.
 export * from './registry.js';
 import { REG, registerFab } from './registry.js';
-import { $, el, bump } from './dom.js';
+import { el, bump, need } from './dom.js';
 import * as audio from './audio.js';
 import { createHud } from './hud.js';
 import { createDock } from './dock.js';
@@ -39,21 +39,26 @@ import { Game, createGame, isBlocked, speedRules, makeCtx } from '../sim/game.js
 import { quiet } from '../sim/story.js';
 import { serialize, deserialize, summary, SAVE_KEY } from '../sim/save.js';
 import { jumpTo } from '../sim/bots.js';
-import type { State, Action, OutEvent } from '../sim/types.js';
+import type { State, Action } from '../sim/types.js';
+import type { NewGameOpts } from '../sim/game.js';
+import type { Prefs, StoryGoal } from '../sim/state.js';
+import type { Renderer } from '../render/types.js';
+import { isUiEvent } from './types.js';
+import type { Api, ScreenDef, Settings, SettingKey, UiEvent, UiEventOf } from './types.js';
 
 const SETTINGS_KEY = 'qsc.settings';
 // toast look for catalogued events (slices may add their own ids here or style them in registerEvent handlers)
 // (tracks add their own with registerEventStyle(id, { cls, ic }))
-const EVENT_STYLE = { heat_wave: { cls: 'heat', ic: 'heat' }, quarter_sun: { ic: 'sun' }, whale: { ic: 'whale' } };
+const EVENT_STYLE: Record<string, { cls?: string; ic?: string }> = { heat_wave: { cls: 'heat', ic: 'heat' }, quarter_sun: { ic: 'sun' }, whale: { ic: 'whale' } };
 // hurryQuiet: quiet growing days run at 2x (off by default, rulings R10); simpleGestures: close-ups take taps instead of
 // drags and rubs (track E)
 export const DEFAULT_SETTINGS = { sound: true, haptics: true, captions: false, reduceMotion: false, autoSlowCreaks: true, relaxedRegister: false, textScale: 1,
   hurryQuiet: false, simpleGestures: false };
-const SIM_PREFS = ['autoSlowCreaks', 'relaxedRegister'];
+const SIM_PREFS: readonly (keyof Prefs & SettingKey)[] = ['autoSlowCreaks', 'relaxedRegister'];
 const QUIET_FAIL = new Set(['story/dialogSeen', 'story/goalDone', 'events/tap', 'clock/pause', 'hands/close']);
 const store = {
   get(k: string) { try { return localStorage.getItem(k); } catch { return null; } },
-  set(k: string|undefined, v: string|undefined) { try { localStorage.setItem(k, v); return true; } catch { return false; } },
+  set(k: string, v: string) { try { localStorage.setItem(k, v); return true; } catch { return false; } },
   del(k: string) { try { localStorage.removeItem(k); } catch { /* storage blocked */ } },
   keys() { try { return Object.keys(localStorage); } catch { return []; } },
 };
@@ -61,8 +66,8 @@ const store = {
 // carving mask until the write fits; if it never does, put them back. Returns whether it was written.
 function setOrMakeRoom(k: string, v: string) {
   if (store.set(k, v)) return true;
-  const spare = store.keys().filter((x) => x.startsWith('qsc.photo.') && x !== k).sort((a, b) => +a.split('.').pop() - +b.split('.').pop());
-  const dropped = [];
+  const spare = store.keys().filter((x) => x.startsWith('qsc.photo.') && x !== k).sort((a, b) => +(a.split('.').pop() ?? '') - +(b.split('.').pop() ?? ''));
+  const dropped: [string, string][] = [];
   for (const x of ['qsc.carve', ...spare]) {
     const old = store.get(x);
     if (old == null) continue;
@@ -72,10 +77,10 @@ function setOrMakeRoom(k: string, v: string) {
   for (const [x, old] of dropped) store.set(x, old);
   return false;
 }
-export function loadSettings() {
+export function loadSettings(): Settings {
   try { return { ...DEFAULT_SETTINGS, ...JSON.parse(store.get(SETTINGS_KEY) || '{}') }; } catch { return { ...DEFAULT_SETTINGS }; }
 }
-export function readSave() {
+export function readSave(): State | null {
   const raw = store.get(SAVE_KEY);
   if (!raw) return null;
   try { return deserialize(raw); } catch (e) { console.warn('Quarter Sun Cove: the save could not be read', e); return null; }
@@ -88,83 +93,115 @@ registerFab({
   when: (s: State) => s.clock.phase === 'weighoff' || s.clock.phase === 'halloween' || s.clock.phase === 'winter',
   label: (s: State) => (s.clock.phase === 'winter' ? `Year ${s.clock.year + 1}` : 'Next'),
   onTap: (api) => {
-    const p = api.s().clock.phase;
+    const p = api.s()?.clock.phase;
     api.dispatch({ type: p === 'weighoff' ? 'weighoff/next' : p === 'halloween' ? 'winter/next' : 'winter/beginYear' });
   },
 });
 
-export function createApp({ R, settings = loadSettings(), params = {} }) {
-  const app = { R, settings, params, game: null, preview: null, mode: 'boot', touchedAt: -1e9, lastInput: performance.now(), lastAlert: -1e9 };
-  const errors = new Set();
-  // A bug in one slice's UI must not stop the frame loop: log it once and carry on.
-  const guard = (where: string, fn: { (): void; (): any; (): any; (): void; (): any; (): number; (): any; (): any; (): any; (): void; (): void; (): void; (): void; (): void; (): void; (): void; (): void; (): any; (): any; (): any; }) => { try { return fn(); } catch (e) { const k = `${where}: ${e.message}`; if (!errors.has(k)) { errors.add(k); console.error(`[ui] ${k}`, e); } } };
+interface AppParams {
+  seed?: number; new?: boolean; jump?: string | null; speed?: string | null;
+  debug?: boolean; mute?: boolean; render?: string;
+}
+/** The app object the UI hangs off: game/title lifecycle, frame state, and the slice UIs once built. */
+interface App {
+  R: Renderer; settings: Settings; params: AppParams; api: Api;
+  game: Game | null; preview: State | null; mode: string;
+  touchedAt: number; lastInput: number; lastAlert: number;
+  glides?: number;
+  director?: { back: { x: number; z: number; zoom: number | undefined }; t: number; glides: number | undefined } | null;
+  debug?: ReturnType<typeof createDebug>;
+  savedAt?: number; saveWarned?: boolean; pausedByHide?: boolean;
+  start?(): void; startNow?(opts?: NewGameOpts): Game;
+  attach?(g: Game): void; detach?(): void; showTitleScreen?(): void; save?(): boolean;
+  continueGame?(): void; newFarm?(): Promise<void>;
+  hud?: ReturnType<typeof createHud>; dock?: ReturnType<typeof createDock>;
+  sheets?: ReturnType<typeof createSheets>; cards?: ReturnType<typeof createCards>;
+  dialog?: ReturnType<typeof createDialog>; toasts?: ReturnType<typeof createToasts>; pins?: ReturnType<typeof createPins>;
+}
 
-  // ---------------------------------------------------------- api for slice UIs
-  const api = app.api = {
-    R, settings,
-    get game() { return app.game; },
-    s: () => app.game?.s || null,
-    dispatch(a: Action) {
-      if (!app.game) return { ok: false, reason: 'no game' };
-      const r = app.game.dispatch(a);
-      for (const ev of r.events) ev.mine = true;     // the answer to a tap: its toasts show at once (toasts.js)
-      app.debug?.action();
-      if (!r.ok && r.reason && !QUIET_FAIL.has(a.type) && !a.quiet) { toasts.toast(r.reason[0].toUpperCase() + r.reason.slice(1), 'bad'); audio.play('thunk'); }
-      return r;
-    },
-    openSheet: (id: any, arg: any) => sheets.open(id, arg),
-    closeSheet: () => sheets.close(),
-    currentSheet: () => sheets.id,
-    openScreen, closeScreen,
-    toast: (text: any, cls: any, ic: any) => toasts.toast(text, cls, ic),
-    notable: (text: any, opts: { urgent?: boolean|undefined; ic?: string|undefined; cls?: string|undefined; mine?: boolean|undefined; }|undefined) => toasts.notable(text, opts),
-    caption: (text: any) => toasts.caption(text),
-    sound(name: string|undefined, opts?: OutEvent|undefined) { const cap = audio.play(name, opts); if (cap) toasts.caption(cap); },
-    haptic: (ms: number|undefined) => audio.haptic(ms),
-    glide(x: any, z: any, zoom?: undefined, ms = 600) { app.glides = (app.glides || 0) + 1; R.cam?.glide?.(x, z, zoom, settings.reduceMotion ? 0 : ms); },
-    home() { R.cam?.home?.(settings.reduceMotion ? 0 : undefined); },
-    confirm: (text: any, opts: { yes?: string|undefined; no?: string|undefined; title?: string|undefined; }|undefined) => confirmModal(text, opts),
-    markTouched() { app.touchedAt = performance.now(); app.lastInput = app.touchedAt; },
-    followGoal,
-    setSetting,
-    saveAndQuit,
-    save,
-    // scrapbook reveal photos live in their own keys so a failed photo write never loses the save (§3.10)
-    photo: {
-      save(year: number, url: any) {
-        const ok = store.set(`qsc.photo.${year}`, url);   // (never at the save's expense: no making room for a photo)
-        for (let y = year - T.winter.scrapbook.keep; y > 0 && store.get(`qsc.photo.${y}`) != null; y--) store.del(`qsc.photo.${y}`);
-        return ok;
+export function createApp({ R, settings = loadSettings(), params = {} }: { R: Renderer; settings?: Settings; params?: AppParams }) {
+  const app: App = {
+    R, settings, params,
+    game: null, preview: null, mode: 'boot', touchedAt: -1e9, lastInput: performance.now(), lastAlert: -1e9,
+    api: {
+      R, settings,
+      get game() { return app.game; },
+      s: () => app.game?.s || null,
+      dispatch(a: Action) {
+        if (!app.game) return { ok: false, reason: 'no game', events: [] };
+        const r = app.game.dispatch(a);
+        for (const ev of r.events) ev.mine = true;   // the answer to a tap: its toasts show at once (toasts.js)
+        app.debug?.action();
+        if (!r.ok && r.reason && !QUIET_FAIL.has(a.type) && !a.quiet) { toasts.toast(r.reason.charAt(0).toUpperCase() + r.reason.slice(1), 'bad'); audio.play('thunk'); }
+        return r;
       },
-      load: (year: any) => store.get(`qsc.photo.${year}`),
+      openSheet: (id, arg) => sheets.open(id, arg),
+      closeSheet: () => sheets.close(),
+      currentSheet: () => sheets.id,
+      openScreen, closeScreen,
+      toast: (text, cls, ic) => toasts.toast(text, cls, ic),
+      notable: (text, opts) => toasts.notable(text, opts),
+      caption: (text) => toasts.caption(text),
+      sound(name, opts) { const cap = audio.play(name, opts ? { type: 'sound', name, ...(typeof opts.pitch === 'number' ? { pitch: opts.pitch } : {}), ...(typeof opts.mine === 'boolean' ? { mine: opts.mine } : {}) } : undefined); if (cap) toasts.caption(cap); },
+      haptic: (ms) => audio.haptic(ms),
+      glide(x, z, zoom, ms = 600) { app.glides = (app.glides ?? 0) + 1; R.cam?.glide?.(x, z, zoom, settings.reduceMotion ? 0 : ms); },
+      home() { R.cam?.home?.(settings.reduceMotion ? 0 : undefined); },
+      confirm: (text, opts) => confirmModal(text, opts).then((v) => v === true),
+      markTouched() { app.touchedAt = performance.now(); app.lastInput = app.touchedAt; },
+      followGoal,
+      setSetting,
+      saveAndQuit,
+      save,
+      // scrapbook reveal photos live in their own keys so a failed photo write never loses the save (§3.10)
+      photo: {
+        save(year, url) {
+          const ok = store.set(`qsc.photo.${year}`, url);   // (never at the save's expense: no making room for a photo)
+          for (let y = year - T.winter.scrapbook.keep; y > 0 && store.get(`qsc.photo.${y}`) != null; y--) store.del(`qsc.photo.${y}`);
+          return ok;
+        },
+        load: (year) => store.get(`qsc.photo.${year}`),
+      },
+      closeTop() { if (screen) { closeScreen(); return true; } if (sheets.id) { sheets.close(); return true; } if (dialog.open) { dialog.tap(); return true; } return false; },
+      blockedByUi: () => app.mode !== 'play' || cards.open,
+      // a tap that closed a dialogue card or a banner must not land on the farm behind it (input.js asks before every world tap)
+      dialogJustTapped: () => dialog.justTapped || banner.justTapped,
+      // [foundation] the shared moment components (plan §2.2): a banner for good news, a quick bubble, a caption over a thing
+      payoff: (o) => banner.payoff(o),
+      bubble: (d) => openBubble(api, { ...d, at: d.at == null ? { x: 0, y: 0, z: 0 } : { x: d.at.x, y: d.at.y, z: d.at.z }, lift: d.lift }).then((v) => String(v)),
+      captionAt(at, text, opts) {
+        const n = caption.show({ x: at.x, y: at.y, z: at.z }, text, { onTap: null, cls: null, ...(opts?.ms === undefined ? {} : { ms: opts.ms }) });
+        if (n) {
+          if (opts?.cls) n.classList.add(...opts.cls.split(' ').filter(Boolean));
+          if (opts?.onTap) { n.classList.add('tappable'); n.addEventListener('click', (e: Event) => { e.stopPropagation(); caption.hide(); opts.onTap?.(); }); }
+        }
+        return n;
+      },
+      reinset: () => sheets.inset(),
     },
-    closeTop() { if (screen) { closeScreen(); return true; } if (sheets.id) { sheets.close(); return true; } if (dialog.open) { dialog.tap(); return true; } return false; },
-    blockedByUi: () => app.mode !== 'play' || cards.open,
-    // a tap that closed a dialogue card or a banner must not land on the farm behind it (input.js asks before every world tap)
-    dialogJustTapped: () => dialog.justTapped || banner.justTapped,
-    // [foundation] the shared moment components (plan §2.2): a banner for good news, a quick bubble, a caption over a thing
-    payoff: (o: any) => banner.payoff(o),
-    bubble: (d: any) => openBubble(api, d),
-    captionAt: (at: any, text: any, opts: { onTap?: null|undefined; cls?: null|undefined; }|undefined) => caption.show(at, text, opts),
   };
+  const api = app.api;
+  const errors = new Set<string>();
+  // A bug in one slice's UI must not stop the frame loop: log it once and carry on.
+  const guard = <T>(where: string, fn: () => T): T | undefined => { try { return fn(); } catch (e) { const k = `${where}: ${e instanceof Error ? e.message : e}`; if (!errors.has(k)) { errors.add(k); console.error(`[ui] ${k}`, e); } } };
+
 
   const hud = createHud(api), dock = createDock(api), sheets = createSheets(api), cards = createCards(api);
-  api.reinset = () => sheets.inset();
   // news waits while an intro is being read (it holds the clock; the morning's other news comes after, one at a time)
   // (and while a banner is up: the morning's news comes after the good news)
-  const dialog = createDialog(api), toasts = createToasts(api, { hold: () => !!app.game?.s.story.dialog[0]?.pause || banner.showing }), pins = createPins(api);
-  const banner = createBanner(api, { touchedRecently: () => performance.now() - lastTouch() < T.ui.glide.touchedWithin * 1000 }), caption = createCaption(api);
+  const hold: () => boolean = () => !!app.game?.s.story.dialog[0]?.pause || !!banner.showing;
+  const dialog = createDialog(api), toasts = createToasts(api, { hold }), pins = createPins(api);
+  const banner = createBanner(api, { touchedRecently: (): boolean => performance.now() - lastTouch() < T.ui.glide.touchedWithin * 1000 }), caption = createCaption(api);
   createInput(api, dock);
   if (params.debug) app.debug = createDebug(api);
 
   // ---------------------------------------------------------- full-screen flows (registerScreen)
-  let screen: { def: any; node: any; id: any; }|null = null;
+  let screen: { id: string; def: ScreenDef; node: HTMLElement } | null = null;
   function openScreen(id: string) {
     const def = REG.screens.get(id);
     if (!def) return false;
     closeScreen();
     const node = el('div.screen', { data: { screen: id } });
-    $('#screens').append(node);
+    need('#screens').append(node);
     screen = { id, def, node };
     guard(`screen ${id}`, () => def.build(node, app.game?.s, api));
     document.body.classList.add('screen-open');
@@ -184,13 +221,13 @@ export function createApp({ R, settings = loadSettings(), params = {} }) {
   function applySettings() {
     audio.configure(settings);
     document.body.classList.toggle('reduce-motion', !!settings.reduceMotion);
-    document.documentElement.style.setProperty('--ts', settings.textScale || 1);
+    document.documentElement.style.setProperty('--ts', String(settings.textScale || 1));
   }
-  function setSetting(key: string, value: any) {
+  function setSetting<K extends SettingKey>(key: K, value: Settings[K]) {
     settings[key] = value;
     store.set(SETTINGS_KEY, JSON.stringify(settings));
     applySettings();
-    if (SIM_PREFS.includes(key) && app.game) api.dispatch({ type: 'prefs/set', key, value, quiet: true });
+    if ((key === 'autoSlowCreaks' || key === 'relaxedRegister') && app.game) api.dispatch({ type: 'prefs/set', key, value: !!value, quiet: true });
     if (key === 'textScale') requestAnimationFrame(() => sheets.inset());
   }
   applySettings();
@@ -198,61 +235,75 @@ export function createApp({ R, settings = loadSettings(), params = {} }) {
   // ---------------------------------------------------------- goals: tapping the Next-up chip shows you where
   // It points and never taps for you (plan P10: the "Water the patch" chip used to water): it opens the station's sheet,
   // where the taught control pulses and scrolls into view, or glides to the place, and pings the control it means.
-  function followGoal(g: { target: any; }) {
+  function followGoal(g: StoryGoal | null) {
     const t = g?.target;
     api.markTouched();
     if (!t) return;
     const key = `${t.kind}:${t.id}`;
     if (t.kind === 'station') {
       // opening a station's sheet is what tapping the station does: navigation, never the lesson's action
-      const st = REG.stations.find((x) => x.id === t.id), sheet = st?.sheet || t.id;
-      if (sheets.id !== sheet) { if (st?.visible?.(api.s())) st.onTap(api); else if (REG.sheets.has(sheet)) api.openSheet(sheet, t.arg); }
+      const st = REG.stations.find((x) => x.id === t.id), sheet = st?.sheet || t.id, cur = api.s();
+      if (sheets.id !== sheet) { if (cur && st?.visible?.(cur)) st.onTap(api); else if (typeof sheet === 'string' && REG.sheets.has(sheet)) api.openSheet(sheet, 'arg' in t ? t.arg : undefined); }
     } else if (t.kind === 'row' && REG.sheets.has('row')) api.openSheet('row', t.id);   // squish row N, cut row N: its sheet
-    else if (t.x != null) api.glide(t.x, t.z, t.zoom);
-    else if (t.kind !== 'fab' && t.kind !== 'hud' && REG.sheets.has(t.id)) api.openSheet(t.id, t.arg);
+    else if (t.x != null && t.z != null) api.glide(t.x, t.z, t.zoom);
+    else if (t.kind !== 'fab' && t.kind !== 'hud' && typeof t.id === 'string' && REG.sheets.has(t.id)) api.openSheet(t.id, 'arg' in t ? t.arg : undefined);
     else if (t.kind !== 'fab' && t.kind !== 'hud') R.cam?.frame?.(t.kind);
     requestAnimationFrame(() => document.querySelectorAll(`[data-target="${CSS.escape(key)}"]${t.control ? `, [data-control="${CSS.escape(t.control)}"]` : ''}`)
-      .forEach((n) => { if (n.offsetParent === null) return; bump(n, 'goal-ping'); setTimeout(() => n.classList.remove('goal-ping'), 1600); }));
+      .forEach((n) => { if (!(n instanceof HTMLElement) || n.offsetParent === null) return; bump(n, 'goal-ping'); setTimeout(() => n.classList.remove('goal-ping'), 1600); }));
   }
 
   // ---------------------------------------------------------- out-events
   const ON = {
-    toast: (ev: OutEvent) => toasts.news(ev.text, ev.cls, ev.icon, { key: ev.key, mine: ev.mine }),
-    sound: (ev: OutEvent) => api.sound(ev.name, ev),
-    alert(ev: OutEvent) {
+    toast: (ev: UiEventOf<'toast'>) => toasts.news(ev.text, ev.cls, ev.icon ?? 'sparkle', { mine: ev.mine, ...(ev.key === undefined ? {} : { key: ev.key }) }),
+    sound: (ev: UiEventOf<'sound'>) => api.sound(ev.name, ev),
+    alert(ev: UiEventOf<'alert'>) {
       // only a threat buzzes and counts as "something urgent" (it is also the only kind that dropped the speed)
       if (ev.threat) { app.lastAlert = performance.now(); audio.haptic(20); }
       if (ev.text) toasts.news(ev.text, ev.cls || 'warn', ev.cls === 'heat' ? 'heat' : 'alert', { mine: ev.mine });
       api.sound(ev.kind === 'creak' ? 'creak' : 'alert');
     },
-    event(ev: OutEvent) {
+    event(ev: UiEventOf<'event'>) {
       const st = EVENT_STYLE[ev.id] || REG.eventStyles.get(ev.id) || {};
       if (ev.text && ev.cls !== 'chain') (ev.cls === 'notable' ? toasts.notable(ev.text, { urgent: ev.urgent, mine: ev.mine, ...st }) : toasts.news(ev.text, st.cls || 'event', st.ic || 'sparkle', { mine: ev.mine }));
       // camera director: glide toward a notable unless the player touched the screen in the last 2 s. Toward, not
       // onto: most of the way, so an event out on the water or at the tile's edge comes into view with the farm
-      if (ev.cls === 'notable' && ev.x != null && performance.now() - lastTouch() > T.ui.glide.touchedWithin * 1000) {
+      if (ev.cls === 'notable' && ev.x != null && ev.z != null && performance.now() - lastTouch() > T.ui.glide.touchedWithin * 1000) {
         const t = R.cam?.target, k = T.ui.glide.toward;
-        const back = t ? { x: t.x, z: t.z, zoom: R.cam.zoom } : null;
+        const back = t ? { x: t.x, z: t.z, zoom: R.cam?.zoom } : null;
         api.glide(t ? t.x + (ev.x - t.x) * k : ev.x, t ? t.z + (ev.z - t.z) * k : ev.z);
         if (back && !settings.reduceMotion) app.director = { back, t: performance.now(), glides: app.glides };
       }
     },
-    cash: (ev: OutEvent) => hud.onCash(ev.delta),
-    goal: (ev: OutEvent) => { if (ev.id && !ev.quiet) api.sound('goal'); },
+    cash: (ev: UiEventOf<'cash'>) => hud.onCash(ev.delta),
+    goal: (ev: UiEventOf<'goal'>) => { if (ev.id && !ev.quiet) api.sound('goal'); },
     goalDone: () => { hud.goalDone(); api.sound('done'); audio.haptic(15); },
     goalLapse: () => hud.goalLapse(),
-    beat: (ev: OutEvent) => app.debug?.beat(ev.id),
-    phase(ev: OutEvent) {
+    beat: (ev: UiEventOf<'beat'>) => app.debug?.beat(ev.id),
+    phase(ev: UiEventOf<'phase'>) {
       save();
-      if (ev.to === 'grow' && ev.from === 'winter') { toasts.notable(`Year ${app.game.s.clock.year}. Spring on the farm.`, { urgent: true, ic: 'patch' }); api.home(); }
+      if (ev.to === 'grow' && ev.from === 'winter') { toasts.notable(`Year ${app.game?.s.clock.year}. Spring on the farm.`, { urgent: true, ic: 'patch' }); api.home(); }
       sheets.close();
     },
     dayEnd() { if (performance.now() - (app.savedAt || 0) > 5000) save(); },
   };
-  function handle(ev: OutEvent) {
-    guard('R.fx', () => R.fx?.(ev));
-    if (ON[ev.type]) guard(`event ${ev.type}`, () => ON[ev.type](ev));
-    for (const fn of REG.events.get(ev.type) || []) guard(`event ${ev.type}`, () => fn(ev, api));
+  function handle(ev: UiEvent) {
+    if (ev.type !== 'ui/idle') guard('R.fx', () => R.fx?.(ev));
+    const run = <K extends UiEvent['type']>(e: UiEventOf<K>, fn: (e: UiEventOf<K>) => void) => {
+      guard(`event ${e.type}`, () => fn(e));
+      for (const f of REG.events.get(e.type) || []) guard(`event ${e.type}`, () => f(e, api));
+    };
+    if (isUiEvent(ev, 'toast')) run(ev, ON.toast);
+    else if (isUiEvent(ev, 'sound')) run(ev, ON.sound);
+    else if (isUiEvent(ev, 'alert')) run(ev, ON.alert);
+    else if (isUiEvent(ev, 'event')) run(ev, ON.event);
+    else if (isUiEvent(ev, 'cash')) run(ev, ON.cash);
+    else if (isUiEvent(ev, 'goal')) run(ev, ON.goal);
+    else if (isUiEvent(ev, 'goalDone')) run(ev, ON.goalDone);
+    else if (isUiEvent(ev, 'goalLapse')) run(ev, ON.goalLapse);
+    else if (isUiEvent(ev, 'beat')) run(ev, ON.beat);
+    else if (isUiEvent(ev, 'phase')) run(ev, ON.phase);
+    else if (isUiEvent(ev, 'dayEnd')) run(ev, ON.dayEnd);
+    else for (const fn of REG.events.get(ev.type) || []) guard(`event ${ev.type}`, () => fn(ev, api));
   }
 
   // ---------------------------------------------------------- saves (one slot; every write is best effort)
@@ -284,13 +335,13 @@ export function createApp({ R, settings = loadSettings(), params = {} }) {
   addEventListener('pagehide', () => save());
 
   // ---------------------------------------------------------- attaching a game
-  function attach(game: Game|null) {
+  function attach(game: Game) {
     app.game = game;
     app.preview = null;
     app.mode = 'play';
     app.lastInput = performance.now();
     hideTitle();
-    $('#game-ui').hidden = false;
+    need('#game-ui').hidden = false;
     hud.reset(); dock.reset();
     for (const k of SIM_PREFS) if (game.s.prefs[k] !== settings[k]) game.dispatch({ type: 'prefs/set', key: k, value: settings[k] });
     game.drain();
@@ -299,24 +350,24 @@ export function createApp({ R, settings = loadSettings(), params = {} }) {
     // glide, shown by the dialog in the next frame, takes over from here
     sheets.inset(); api.home();
     requestAnimationFrame(() => sheets.inset());
-    warmPortraits(['gran', 'hal', 'moss'], game.s.meta.species);   // year 1's first speakers
+    warmPortraitsIdle(['gran', 'hal', 'moss'], game.s.meta.species);   // year 1's first speakers
   }
   function detach() {
     app.game = null; app.mode = 'title';
-    $('#game-ui').hidden = true;
+    need('#game-ui').hidden = true;
     cards.hide(); pins.clear(); toasts.clear(); banner.clear(); caption.hide(); closeScreen();
   }
   function showTitleScreen() {
     const s = readSave();
     app.mode = 'title';
     app.preview = s || createGame({ seed: params.seed ?? 1 });
-    showTitle(app, { save: s ? summary(s) : null });   // frames the camera between the title and the buttons
+    showTitle({ ...app, game: null, preview: null }, { save: s ? summary(s) : null });   // frames the camera between the title and the buttons
     R.cam?.title?.(true);
-    warmPortraits(['mayor', ...T.species.list]);        // the new-farm flow's Mayor and species picker
+    warmPortraitsIdle(['mayor', ...T.species.list]);        // the new-farm flow's Mayor and species picker
   }
   // Each portrait is drawn on a little offscreen renderer (tens of ms on a phone; then cached). Draw the ones the next
   // minutes need one at a time while nothing else is happening, so a dialogue card or the species picker never stalls.
-  function warmPortraits(keys: any[], species?: State|undefined) {
+  function warmPortraitsIdle(keys: string[], species?: string) {
     const idle = globalThis.requestIdleCallback || ((fn) => setTimeout(fn, 250));
     const next = () => { const k = keys.shift(); if (!k) return; guard('portrait', () => R.portrait?.(k, species ? { species } : {})); idle(next, { timeout: 3000 }); };
     idle(next, { timeout: 3000 });
@@ -328,13 +379,14 @@ export function createApp({ R, settings = loadSettings(), params = {} }) {
     if (store.get(SAVE_KEY) && !(await api.confirm('Your current farm will be replaced. Start a new one?', { yes: 'New farm', no: 'Keep my farm', title: 'Start over?' }))) return;
     const s = createGame({ seed: params.seed ?? (Math.floor(Math.random() * 1e9) + 1) });
     app.game = new Game(s); app.preview = null; app.mode = 'newfarm';
-    newFarmFlow(app, s, () => {
-      app.game.dispatch({ type: 'newgame/start' });
-      warmPortraits(api, app.game.s);              // while Marlene's curtain is down (Gran speaks the moment it lifts)
-      curtain(() => attach(app.game), 900);
+    newFarmFlow({ ...app, game: null, preview: null }, s, () => {
+      app.game?.dispatch({ type: 'newgame/start' });
+      warmPortraits(api, s);                       // while Marlene's curtain is down (Gran speaks the moment it lifts)
+      const g0 = app.game;
+      if (g0) curtain(() => attach(g0), 900);
     });
   };
-  app.startNow = (opts = {}) => {
+  app.startNow = (opts: NewGameOpts = {}) => {
     const s = createGame({ seed: params.seed ?? 1, ...opts });
     const g = new Game(s);
     g.dispatch({ type: 'newgame/start' });
@@ -345,8 +397,8 @@ export function createApp({ R, settings = loadSettings(), params = {} }) {
   };
   // the fog curtain: Marlene rolls in over the change of scene, then lifts. The 3D fog thickens with the CSS veil
   // and eases back to the day's own fog as it lifts, so the farm comes out of real fog.
-  function curtain(mid: { (): void; (): void; (): void; }, hold = 450) {
-    const c = $('#curtain');
+  function curtain(mid: () => void, hold = 450) {
+    const c = need('#curtain');
     if (settings.reduceMotion) { mid(); return; }
     c.classList.add('on');
     R.setFogOverride?.(0.75);
@@ -359,7 +411,8 @@ export function createApp({ R, settings = loadSettings(), params = {} }) {
   // open, 2 on a quiet growing day when "Hurry quiet days" is on (quiet() is checked a few times a second, not every frame).
   function uiMul(s: State, now: number) {
     if (settings.hurryQuiet && now - quietAt > 250) { quietAt = now; quietNow = s.clock.phase === 'grow' && quiet(s, makeCtx(s)); }
-    const mul = clockMul(s, { sheetId: sheets.id, sheetArg: sheets.arg, settings, livePins: pins.count, quietNow });
+    const mulArgs = { sheetId: sheets.id, sheetArg: sheets.arg, settings, livePins: pins.count, quietNow };
+    const mul = clockMul(s, mulArgs);
     if (mul !== mulShown) {
       mulShown = mul;
       document.body.classList.toggle('clock-stopped', mul === 0);
@@ -371,7 +424,7 @@ export function createApp({ R, settings = loadSettings(), params = {} }) {
     const rdt = Math.min(0.1, Math.max(0, (now - last) / 1000));
     last = now;
     const g = app.game, s = g?.s;
-    if (g && app.mode === 'play') {
+    if (g && app.mode === 'play' && s) {
       const mul = guard('clockMul', () => uiMul(s, now)) ?? 1;
       if (!screen?.def.pauses) guard('tickReal', () => g.tickReal(rdt * mul));
       for (const ev of g.drain()) handle(ev);
@@ -380,7 +433,7 @@ export function createApp({ R, settings = loadSettings(), params = {} }) {
     } else if (g) for (const ev of g.drain()) guard('R.fx', () => R.fx?.(ev));
     const view = g?.s || app.preview;
     if (view) guard('R.sync', () => R.sync(view, rdt));
-    if (g && app.mode === 'play') {
+    if (g && app.mode === 'play' && s) {
       guard('hud', () => hud.sync(s, rdt));
       guard('dock', () => dock.sync(s));
       guard('sheet', () => sheets.sync(s));
@@ -389,8 +442,10 @@ export function createApp({ R, settings = loadSettings(), params = {} }) {
       guard('pins', () => pins.sync(s));
       guard('toasts', () => toasts.sync());
       guard('screens', () => autoScreens(s));
-      if (screen?.def.update) guard('screen', () => screen.def.update(screen.node, s, api));
-      app.debug && guard('debug', () => app.debug.sync(s));
+      const upd = screen?.def.update, sc = screen;
+      if (upd && sc) guard('screen', () => upd(sc.node, s, api));
+      const dbg = app.debug;
+      if (dbg) guard('debug', () => dbg.sync(s));
       if (s.clock.sub === 'weekend' && now - (app.savedAt || 0) > T.ui.autosaveWeekend * 1000) save();
     }
     requestAnimationFrame(frame);
@@ -425,8 +480,8 @@ export function createApp({ R, settings = loadSettings(), params = {} }) {
   }
   addEventListener('pointerdown', (e) => {
     app.lastInput = performance.now();
-    const b = e.target.closest?.('button');
-    if (b && !b.disabled) { audio.play('tick'); audio.haptic(8); }
+    const b = e.target instanceof Element ? e.target.closest('button') : null;
+    if (b instanceof HTMLButtonElement && !b.disabled) { audio.play('tick'); audio.haptic(8); }
   }, { capture: true, passive: true });
   addEventListener('keydown', () => { app.lastInput = performance.now(); }, { capture: true });
 

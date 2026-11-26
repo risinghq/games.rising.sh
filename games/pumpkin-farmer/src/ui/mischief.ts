@@ -10,20 +10,21 @@ import { registerPin, registerCard, registerEvent, registerEventStyle, registerT
 import { bubbleCard } from './bubble.js';
 import { captionMs } from './caption.js';
 import { T } from '../sim/tuning.js';
-import type { State, OutEvent } from '../sim/types.js';
-import type { Api } from './types.js';
+import type { State } from '../sim/types.js';
+import type { Api, At } from './types.js';
 
 const M = T.mischief, GLIDE_MS = 650, WHISTLE_MS = 4800;   // (render/mischief.js herdSync: his run in, a lap, the trot off)
+const isAt = (v: unknown): v is At => typeof v === 'object' && v !== null && 'x' in v && typeof v.x === 'number' && 'z' in v && typeof v.z === 'number';
 // one ✦ pin per delight (only one shows at a time: the sim keeps a single s.mischief.pin); labels say who, never what to do
-const PINS = [
+const PINS: [string, string, string][] = [
   ['biscuit_dig', 'Biscuit found something', 'sparkle'], ['seal_haulout', 'A seal on the farm', 'sparkle'], ['otter_look', 'An otter in the cove', 'sparkle'],
   ['possum_nap', 'A possum in the row', 'sparkle'], ['skunk_shade', 'Skunks under the sail', 'sparkle'], ['pamela', 'Pamela!', 'sparkle'],
   ['swarm_look', 'Bees on the scarecrow', 'sparkle'], ['whale', 'A whale off the bluff', 'sparkle'], ['volunteer_look', 'A volunteer vine', 'sparkle'],
 ];
-const pinOf = (s: State, id: string|undefined) => (s?.clock?.phase === 'grow' && s.mischief?.pin?.id === id ? s.mischief.pin : null);
+const pinOf = (s: State | null, id: string) => (s?.clock?.phase === 'grow' && s.mischief?.pin?.id === id ? s.mischief.pin : null);
 for (const [id, label, ic] of PINS) {
   registerPin({ id: `delight-${id}`, cls: 'delight', icon: ic, label, when: (s) => !!pinOf(s, id),
-    pos: (s) => { const p = pinOf(s, id); return { x: p.x, y: p.y ?? 0.6, z: p.z }; },
+    pos: (s) => { const p = pinOf(s, id); return p ? { x: p.x, y: p.y ?? 0.6, z: p.z } : null; },
     onTap: (api) => look(api) });
   registerEventStyle(id, { cls: 'delight', ic: 'sparkle' });
 }
@@ -33,9 +34,9 @@ for (const id of ['otter_kelp', 'kelp']) registerEventStyle(id, { cls: 'delight'
 // The ✦ tap: glide in to the visitor's close frame, let it play its one animation (render/mischief.js on mischief/look),
 // then its line: a caption over it, a dialogue card, or its bubble. When that is done, glide back, unless the player has
 // moved the camera themselves meanwhile.
-let moment: { at: any; dialog: any; card: any; back?: { x: number; z: number; zoom: number|undefined; }|null; t?: number; }|null = null;
+let moment: { at: At; dialog: string | null; card: boolean; back?: { x: number; z: number; zoom: number | undefined } | null; t?: number } | null = null;
 // (timed on frames, not setTimeout: a backgrounded tab holds the moment, and tools/drive.mjs's virtual clock sees it)
-function after(ms: number, fn: { (): HTMLElement|null; (): void; (): void; (): any; }) {
+function after(ms: number, fn: () => unknown) {
   const t0 = performance.now(), tick = () => (performance.now() - t0 >= ms ? fn() : requestAnimationFrame(tick));
   requestAnimationFrame(tick);
 }
@@ -45,14 +46,17 @@ function look(api: Api) {
   const back = cam?.target ? { x: cam.target.x, z: cam.target.z, zoom: cam.zoom } : null;
   const r = api.dispatch({ type: 'mischief/tap' });
   if (!r.ok) return;
-  const zoom = cam?.zoomFor ? cam.zoomFor(r.fit ?? M.look.fit) : undefined;
-  api.glide(r.at.x, r.at.z, zoom, GLIDE_MS);
+  const at = r.at, dialog = typeof r.dialog === 'string' ? r.dialog : null, caption = typeof r.caption === 'string' ? r.caption : null;
+  if (!isAt(at)) return;
+  const fit = typeof r.fit === 'number' ? r.fit : M.look.fit;
+  const zoom = cam?.zoomFor ? cam.zoomFor(fit) : undefined;
+  api.glide(at.x, at.z, zoom, GLIDE_MS);
   api.haptic(12);
-  moment = { back, at: r.at, dialog: r.dialog, card: !r.dialog && !r.caption, t: performance.now() };
-  if (r.caption) {
-    const ms = captionMs(r.caption);
-    after(api.settings.reduceMotion ? 0 : GLIDE_MS, () => api.captionAt(r.at, r.caption, { ms, cls: 'delight' }));
-    after(GLIDE_MS + ms + 200, () => { if (moment?.at === r.at) goBack(api); });
+  moment = { back, at, dialog, card: !dialog && !caption, t: performance.now() };
+  if (caption) {
+    const ms = captionMs(caption, undefined);
+    after(api.settings.reduceMotion ? 0 : GLIDE_MS, () => api.captionAt(at, caption, { ms, cls: 'delight' }));
+    after(GLIDE_MS + ms + 200, () => { if (moment?.at === at) goBack(api); });
   }
 }
 function goBack(api: Api) {
@@ -65,14 +69,14 @@ function goBack(api: Api) {
 }
 // tapping the visitor itself (render/mischief.js hitboxes, id `visitor:{key}`) is the same as tapping its ✦: only its own (a
 // seal still napping on the beach isn't Pamela's ✦ in the bramble)
-const RIGS = { biscuit_dig: ['dig'], seal_haulout: ['seal'], otter_look: ['otter'], possum_nap: ['possum'], skunk_shade: ['skunk', 'kit1', 'kit2'], pamela: ['pamela'] };
-registerTap('visitor', (hit, api: Api) => {
+const RIGS: Record<string, string[]> = { biscuit_dig: ['dig'], seal_haulout: ['seal'], otter_look: ['otter'], possum_nap: ['possum'], skunk_shade: ['skunk', 'kit1', 'kit2'], pamela: ['pamela'] };
+registerTap('visitor', (hit, api) => {
   const pin = api.s()?.mischief?.pin;
   if (pin && RIGS[pin.id]?.includes(String(hit?.id ?? '').replace(/^visitor:/, ''))) look(api);
 });
-registerEvent('dialogDone', (ev: OutEvent, api: Api) => { if (moment?.dialog && ev.id === moment.dialog) goBack(api); });
+registerEvent('dialogDone', (ev, api) => { if (moment?.dialog && ev.id === moment.dialog) goBack(api); });
 // (a choice Gran answers, "Row 5's a sixth clear": stay on the bramble until her line is read; that is the payoff)
-registerEvent('cardDone', (ev: OutEvent, api: Api) => {
+registerEvent('cardDone', (ev, api) => {
   if (!moment?.card || ev.kind !== 'mischief') return;
   const d = api.s()?.story?.dialog?.at(-1);
   // (a whistle: stay while Biscuit runs over, circles her and walks her to the fence; that is the payoff, "my dog's a hero")
@@ -82,4 +86,4 @@ registerEvent('phase', () => { moment = null; });
 
 // ------------------------------------------------------------ the bubbles (Pamela; the possum from year 2)
 // Sim cards (they hold the clock); anchored over the visitor, both choices equal (the sim marks neither primary).
-registerCard('mischief', bubbleCard({ anchor: (s, card) => card.data?.at || null, lift: 70 }));
+registerCard('mischief', bubbleCard({ anchor: (_s, card) => card.data?.at || null, lift: 70 }));

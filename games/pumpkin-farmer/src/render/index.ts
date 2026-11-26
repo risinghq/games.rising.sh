@@ -47,7 +47,7 @@ import createCrawlView from './crawl.js';
 import createHandsView from './hands.js';
 import type { State, Tuning } from '../sim/types.js';
 import type { Settings } from '../ui/types.js';
-import type { FxEvent, HitHandler, Kit, PhotoOpts, Renderer } from './types.js';
+import type { FxEvent, HitHandler, Kit, PhotoOpts, Renderer, View } from './types.js';
 
 export const VIEWS = [createCast, createPatchView, createGiantView, createSeasonView, createWeighoffView, createMischiefView, createCrawlView, createHandsView];
 
@@ -103,7 +103,7 @@ export async function createRenderer({ container = document.body, phone = detect
   cam = createCamera(K);
   hit = createHit(K);
   fx = createFx(K);
-  const views = VIEWS.map((make) => make(K));
+  const views: View[] = VIEWS.map((make) => make(K));
   Object.assign(K.squashables, { weighmaster: K.cast.weighmaster.root, biscuit: K.cast.biscuit.root });
 
   const resize = () => { const [w, h] = size(); renderer.setSize(w, h, false); K.cam.resize(w, h); };
