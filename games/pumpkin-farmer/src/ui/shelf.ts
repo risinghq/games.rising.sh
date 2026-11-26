@@ -16,11 +16,11 @@ const round5 = (n: number) => Math.max(0, Math.round(n / 5) * 5);
 export const crateDates = (i: number) => { const w = WK[i]; return w ? `${label(w.sat)}–${label(w.sun).split(' ')[1]}` : ''; };
 
 /** One crate's last-year shares: [big, small], when the year has them. */
-type LastShare = [big: number, small: number][];
+type LastShare = [big: number | null, small: number | null][];
 
 // opts: { sel: weekend index to show the figures for (-1 none), compact, onTap(i), pulse: [i], last: [[big, small]] }
 // last (years 2+, rulings R13): last October's share of each weekend's wants that sold, a faint dashed line on each half
-export function crateRow(sh: Crate[], opts: { compact?: boolean; sel?: number; onTap?: (i: number) => void; pulse?: number[]; last?: LastShare } = {}) {
+export function crateRow(sh: Crate[], opts: { compact?: boolean; sel?: number; onTap?: (i: number) => void; pulse?: number[]; last?: LastShare | null } = {}) {
   const row = el('div.crates', { class: opts.compact ? 'compact' : null, role: 'list', 'aria-label': "October's crates" });
   for (const c of sh) {
     const box = el('div.cr-box', {}, el('i.cr-big'), el('i.cr-small'), el('i.cr-lb'), el('i.cr-ls'), el('i.cr-rim'));

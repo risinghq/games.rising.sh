@@ -20,11 +20,11 @@ import { rowZ, SWARM_SPOTS, VINE_SPOTS } from '../sim/layout.js';
 import { isActive, getActive } from '../sim/events.js';
 import { own } from '../sim/util.js';
 import * as P from '../sim/patch.js';
-import type { State, Action } from '../sim/types.js';
-import type { Api, UiEventOf } from './types.js';
+import type { State, Action, Card } from '../sim/types.js';
+import type { Api, UiEventOf, WeekendHook } from './types.js';
 import type { PatchRow } from '../sim/state.js';
 import type { Hit } from '../render/types.js';
-export const rowHooks: { weekend: ((api: Api, row: number | null, what: string) => void) | null } = { weekend: null };
+export const rowHooks: { weekend: WeekendHook | null } = { weekend: null };
 const VT = T.varieties, TP = T.patch, B = TP.bugs;
 const SEP1 = dayOf('Sep 1'), OCT1 = dayOf('Oct 1');
 const NAMES = P.LINES.names;
@@ -177,7 +177,7 @@ registerEvent('patch/sowing', (ev, api) => {
 // [B] a crate filled to its rim while the Patch station is out of sight: the station button bounces
 registerEvent('patch/crate', (ev, api) => { if (ev.level === 3 && ev.was < 3 && api.currentSheet() !== 'row') bump(document.querySelector<HTMLElement>('[data-target="station:patch"]'), 'squash'); });
 // [B] the two bubbles: Gran's empty-row question (rulings R14) and the June fog job (rulings R8), anchored on the row
-const rowAnchor = (_s: unknown, card: { data: string | { at?: unknown }[] }) => card.data?.at ?? null;
+const rowAnchor = (_s: State, card: Card) => card.data?.at ?? null;
 registerCard('emptyRow', bubbleCard({ anchor: rowAnchor }));
 registerCard('fogjob', bubbleCard({ anchor: rowAnchor }));
 registerEvent('patch/ripe', (ev, api) => { if (ev.first) { api.sound('ching', { pitch: ev.weekend ? 1.35 : 1.1 }); if (ev.weekend) api.haptic(25); } });
@@ -347,7 +347,7 @@ const selCrate = (s: State, sh: P.Crate[]) => {
 function lastOct(s: State) {
   const o = s.patch.lastReport?.oct;
   if (s.clock.year < 2 || !o || !tableMode(s)) return null;
-  return o.map((x) => [x.big + x.missBig ? x.big / (x.big + x.missBig) : null, x.small + x.missSmall ? x.small / (x.small + x.missSmall) : null]);
+  return o.map((x): [number | null, number | null] => [x.big + x.missBig ? x.big / (x.big + x.missBig) : null, x.small + x.missSmall ? x.small / (x.small + x.missSmall) : null]);
 }
 function cratesView(n: HTMLElement | null, s: State, api: Api) {
   if (!n) return;
@@ -708,7 +708,7 @@ function doAct(api: Api, a: Action) {
 }
 function storeAct(api: Api, r: number | null, what: string, n?: number) {
   const s = api.s();
-  if (s && weekendNow(s) && rowHooks.weekend) { rowHooks.weekend(api, r, what); return; }
+  if (s && weekendNow(s) && rowHooks.weekend) { rowHooks.weekend(api, r ?? undefined, what); return; }
   const extra = n !== undefined && n > 0 ? { n } : {};
   if (what === 'cut' && r != null) doAct(api, { type: 'patch/cut', row: r, ...extra });
   else doAct(api, { type: 'patch/restock', row: r ?? undefined, ...extra });

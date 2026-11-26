@@ -37,7 +37,6 @@ export interface RendererCam {
   readonly touchedAt?: number;
   readonly target?: THREE.Vector3;
   readonly azimuth?: number;
-  touchedAt?: number;
 }
 
 export interface Renderer {

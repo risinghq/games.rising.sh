@@ -7,6 +7,7 @@ import { portraitEl } from './dialog.js';
 import { LINES, SPEAKERS, SPECIES, SURNAMES, DEFAULT_FARM, line } from '../sim/story.js';
 import { T } from '../sim/tuning.js';
 import type { State } from '../sim/types.js';
+import type { Game } from '../sim/game.js';
 import type { Api, Settings } from './types.js';
 
 /** The save summary the title's Continue button shows. */
@@ -15,7 +16,7 @@ interface SaveInfo { farm: string; year: number; when: string }
 const SPEAKER_NAMES: Record<string, { name: string }> = SPEAKERS;
 
 // ------------------------------------------------------------ title
-export function showTitle(app: { api: Api; continueGame?: () => void; newFarm?: () => void }, { save }: { save?: SaveInfo | null } = {}) {
+export function showTitle(app: { api: Api; continueGame?: () => void; newFarm?: () => void; game?: Game | null; preview?: State | null }, { save }: { save?: SaveInfo | null } = {}) {
   const root = need('#title');
   root.innerHTML = '';
   const cont = save ? el('button.btn.primary.cont', { onclick: () => app.continueGame?.() },
@@ -44,7 +45,7 @@ export function hideTitle() { const t = $('#title'); if (t) t.innerHTML = ''; do
 // ------------------------------------------------------------ new farm
 // The flow edits a real 'newgame' state through newgame/set, so the renderer shows the choice live (the farmer
 // changes species on the dock, the stand sign repaints) before newgame/start lifts the fog.
-export function newFarmFlow(app: { api: Api }, s: State, onDone: () => void) {
+export function newFarmFlow(app: { api: Api; game?: Game | null; preview?: State | null }, s: State, onDone: () => void) {
   const api = app.api, root = need('#title');
   const steps = ['welcome', 'marlene', 'species', 'surname', 'farm'];
   let i = 0, picked = false;
