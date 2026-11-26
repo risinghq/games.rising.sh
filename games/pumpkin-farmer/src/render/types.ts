@@ -46,7 +46,7 @@ export interface Renderer {
   project(x: number, y: number, z: number): Projected;
   /** A data URL of the current view (the scrapbook photo). */
   photo(w?: number, h?: number, type?: string, quality?: number, opts?: PhotoOpts): string;
-  portrait(key: string, opts?: PortraitOpts): string;
+  portrait(key: string, opts?: folk.PortraitOpts): string;
   cam: RendererCam;
   setFogOverride(d: number): void;
   on(type: string, fn: HitHandler): (() => void) | void;

@@ -26,7 +26,7 @@ const PRESETS = {
   dusk: { bg: 0x9b97ab, sun: 0xe0957e, sunI: 1.5, pos: [-30, 6, 2], sky: 0xb3a9c2, gnd: 0x4e4a52, hemiI: 0.95, glow: 0.62, water: 0x6d8a98 },
   night: { bg: 0x1a2130, sun: 0x8ea6d8, sunI: 0.75, pos: [12, 26, -16], sky: 0x3d4d70, gnd: 0x1a1c22, hemiI: 0.75, glow: 1, water: 0x4d6f7a },
 } satisfies Record<string, Preset>;
-type PresetName = keyof typeof PRESETS;
+export type PresetName = keyof typeof PRESETS;
 const COLORS = ['bg', 'sun', 'sky', 'gnd', 'water'] as const;
 const state = () => ({ bg: new THREE.Color(), sun: new THREE.Color(), sky: new THREE.Color(), gnd: new THREE.Color(), water: new THREE.Color(), pos: new THREE.Vector3(), sunI: 0, hemiI: 0, glow: 0 });
 export type Light = ReturnType<typeof state>;
