@@ -71,6 +71,13 @@ export interface LocalFx {
   'cast': { who: string; act: string; secs?: number };
   'hunt/start': { row: number; hunt: Hunt };
   'hunt/end': object;
+  'weighoff/beat': { k: number; n: number; grade: 'perfect' | 'good' | 'wobble' };
+  'weighoff/eyes': { k: number; caught?: boolean } & (
+    | { on: true; x: number; y: number; z: number }
+    | { on: false; x?: number; y?: number; z?: number });
+  'weighoff/readout': { text: string; label?: string };
+  'weighoff/reveal': { phase: 'read' | 'count' | 'lock' | 'hold' | 'done'; heavy?: boolean; light?: boolean; exhibition?: boolean };
+  'winter/carve': { canvas?: HTMLCanvasElement | null };
 }
 type LocalFxType = keyof LocalFx;
 /** What R.fx and every view hear: the sim's out-events and the UI's local effects. */
