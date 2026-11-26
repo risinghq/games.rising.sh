@@ -8,19 +8,23 @@
 import { el } from './dom.js';
 import { label, weekends } from '../sim/calendar.js';
 import { LINES } from '../sim/patch.js';
+import type { Crate } from '../sim/patch.js';
 
 const WK = weekends();
 const pct = (x: number) => `${Math.round(Math.max(0, Math.min(1, x)) * 100)}%`;
 const round5 = (n: number) => Math.max(0, Math.round(n / 5) * 5);
-export const crateDates = (i: string|number) => `${label(WK[i].sat)}–${label(WK[i].sun).split(' ')[1]}`;
+export const crateDates = (i: number) => { const w = WK[i]; return w ? `${label(w.sat)}–${label(w.sun).split(' ')[1]}` : ''; };
+
+/** One crate's last-year shares: [big, small], when the year has them. */
+type LastShare = [big: number, small: number][];
 
 // opts: { sel: weekend index to show the figures for (-1 none), compact, onTap(i), pulse: [i], last: [[big, small]] }
 // last (years 2+, rulings R13): last October's share of each weekend's wants that sold, a faint dashed line on each half
-export function crateRow(sh: { id: string; i: number; needBig: number; needSmall: number; big: number; small: number; met: number; level: number; stage: any; causes: { cause: string; row: unknown; n: any; }[]; rows: unknown[]; }[], opts = {}) {
+export function crateRow(sh: Crate[], opts: { compact?: boolean; sel?: number; onTap?: (i: number) => void; pulse?: number[]; last?: LastShare } = {}) {
   const row = el('div.crates', { class: opts.compact ? 'compact' : null, role: 'list', 'aria-label': "October's crates" });
   for (const c of sh) {
     const box = el('div.cr-box', {}, el('i.cr-big'), el('i.cr-small'), el('i.cr-lb'), el('i.cr-ls'), el('i.cr-rim'));
-    const node = el(opts.onTap ? 'button.crate' : 'div.crate', { role: 'listitem', data: { w: c.i }, onclick: opts.onTap ? () => opts.onTap(c.i) : null },
+    const node = el(opts.onTap ? 'button.crate' : 'div.crate', { role: 'listitem', data: { w: c.i }, onclick: opts.onTap ? () => opts.onTap?.(c.i) : null },
       box, el('b.cr-id', { text: c.id }), el('span.cr-lv'));
     row.append(node);
   }
@@ -28,33 +32,36 @@ export function crateRow(sh: { id: string; i: number; needBig: number; needSmall
   fillCrates(row, sh, opts);
   return row;
 }
-export function fillCrates(row: HTMLElement, sh: any[], { sel = -1, pulse = [], last = null } = {}) {
+export function fillCrates(row: HTMLElement, sh: Crate[], { sel = -1, pulse = [], last = null }: { sel?: number; pulse?: number[]; last?: LastShare | null } = {}) {
   const nodes = row.querySelectorAll('.crate');
-  sh.forEach((c: { needBig: number; big: number; needSmall: number; small: number; stage: string; i: number; level: number; id: any; }, k: string|number) => {
+  sh.forEach((c, k) => {
     const n = nodes[k];
-    if (!n) return;
+    if (!(n instanceof HTMLElement)) return;
     const big = c.needBig ? c.big / c.needBig : 0, small = c.needSmall ? c.small / c.needSmall : 0;
-    n.querySelector('.cr-big').style.height = pct(big);
-    n.querySelector('.cr-small').style.height = pct(small);
-    const lw = c.stage !== 'past' && last?.[c.i];
-    for (const [cls, f] of [['.cr-lb', lw?.[0]], ['.cr-ls', lw?.[1]]]) {
-      const m = n.querySelector(cls);
+    const bigEl = n.querySelector<HTMLElement>('.cr-big'), smallEl = n.querySelector<HTMLElement>('.cr-small');
+    if (bigEl) bigEl.style.height = pct(big);
+    if (smallEl) smallEl.style.height = pct(small);
+    const lw = c.stage !== 'past' ? last?.[c.i] : undefined;
+    for (const [cls, f] of [['.cr-lb', lw?.[0]], ['.cr-ls', lw?.[1]]] as const) {
+      const m = n.querySelector<HTMLElement>(cls);
       if (m) { m.hidden = f == null; if (f != null) m.style.bottom = pct(f); }
     }
-    const lv = c.stage === 'past' ? 'sold' : LINES.level[c.level];
+    const lv = c.stage === 'past' ? 'sold' : LINES.level[c.level] ?? '';
     const was = n.dataset.lv;
     n.dataset.lv = String(c.level);
     n.className = n.className.replace(/\blv\d\b|\bsel\b|\bpast\b|\bpulse\b|\bplunk\b/g, '').trim() + ` lv${c.level}${c.i === sel ? ' sel' : ''}${c.stage === 'past' ? ' past' : ''}${pulse.includes(c.i) ? ' pulse' : ''}`;
     // a crate reaching its rim lands with a plunk (the Table plays the sound)
     if (was != null && +was < 3 && c.level === 3) { n.classList.add('plunk'); row.dispatchEvent(new CustomEvent('plunk', { detail: c.i })); }
-    n.querySelector('.cr-lv').textContent = lv;
+    const lvEl = n.querySelector('.cr-lv');
+    if (lvEl) lvEl.textContent = lv;
     n.setAttribute('aria-label', `${c.id}, ${crateDates(c.i)}: ${lv}`);
   });
   const cap = row.querySelector('.cr-cap');
-  if (cap) cap.textContent = sel >= 0 && sh[sel] ? crateCaption(sh[sel]) : '';
+  const c = sel >= 0 ? sh[sel] : undefined;
+  if (cap) cap.textContent = c ? crateCaption(c) : '';
 }
 // "W2 wants ~45 big, ~50 small · nothing yet", then "W2: 40 of ~45 big, 50 of ~50 small" (or "W2 · sold ..." once past)
-export function crateCaption(c: { stage: string; id: any; big: any; small: any; needBig: any; needSmall: any; }) {
+export function crateCaption(c: Crate) {
   if (c.stage === 'past') return `${c.id} · sold ${c.big} big, ${c.small} small`;
   // "W1: 25 of ~25 big, 0 of ~30 small" once anything is coming; before that, what the weekend wants
   if (!(round5(c.big) + round5(c.small))) return `${c.id} wants ~${round5(c.needBig)} big, ~${round5(c.needSmall)} small · nothing yet`;

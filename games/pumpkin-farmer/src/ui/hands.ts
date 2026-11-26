@@ -17,10 +17,35 @@ import { el, icon, bump } from './dom.js';
 import { REG } from './registry.js';
 import { portraitEl } from './dialog.js';
 import './hands-bugs.js';
-import type { Api, HandsDef } from './types.js';
+import type { Api, HandsDef, HandsKit } from './types.js';
+import type { ActionResult, OutEvent } from '../sim/types.js';
 
 const END_MS = 1500;          // how long an ending stays (the result line is read, the splats fade) before the camera goes back
-let cur: { K?: any; ended: any; last: any; t: any; endLeft?: any; raf: any; id?: any; def?: HandsDef; arg?: any; node?: HTMLElement; strip?: HTMLElement; done?: HTMLElement; ring?: HTMLElement; timer?: any; back?: { x: number; z: number; zoom: number|undefined; az: number|undefined; polar: number|undefined; }; }|null = null;
+
+/** The live close-up: its verb, DOM, camera bookmark and raf loop. */
+interface HandsCur {
+  id: string;
+  def: HandsDef;
+  arg: unknown;
+  node: HTMLElement;
+  strip: HTMLElement;
+  done: HTMLElement;
+  ring: HTMLElement;
+  /** seconds on the Done ring; 0 means none */
+  timer: number;
+  /** seconds the verb has run */
+  t: number;
+  /** the reason it ended, once it has */
+  ended: string | null;
+  /** where the camera was before the verb framed its subject */
+  back: { x: number; z: number; zoom: number | undefined; az: number | undefined; polar: number | undefined };
+  raf: number;
+  last: number;
+  /** seconds left to show the ending */
+  endLeft: number;
+  K?: HandsKit;
+}
+let cur: HandsCur|null = null;
 
 export function openHands(api: Api, id: string, arg: unknown) {
   const def = REG.hands.get(id), R = api.R;
@@ -31,25 +56,25 @@ export function openHands(api: Api, id: string, arg: unknown) {
   const s = api.s(), timer = def.timer?.(api) ?? 0;
   const strip = el('div.hands-strip', {}, el('span.hands-face'), el('span.hands-text'), el('b.hands-count'));
   const ring = el('span.hands-ring', { html: '<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="21"/><circle class="t" cx="24" cy="24" r="21"/></svg>' });
-  const done = el('button.hands-done', { 'aria-label': 'Done', onclick: (e: { stopPropagation: () => void; }) => { e.stopPropagation(); K.end('done'); } }, ring, el('span', { html: icon('check') }));
+  const done = el('button.hands-done', { 'aria-label': 'Done', onclick: (e) => { e.stopPropagation(); K.end('done'); } }, ring, el('span', { html: icon('check') }));
   const node = el('div', { id: 'hands', role: 'application', 'aria-label': 'Close-up' }, strip, done,
     el('div.hands-combo', { 'aria-hidden': 'true' }), el('div.hands-big', { 'aria-live': 'polite' }));
   document.body.append(node);
   document.body.classList.add('hands-open');
   const cam = R.K?.cam, off = cam?.ortho ? cam.ortho.position.clone().sub(cam.target) : null;
-  const back = { x: R.cam.target.x, z: R.cam.target.z, zoom: R.cam.zoom, az: R.cam.azimuth, polar: off ? Math.acos(off.y / off.length()) : undefined };
-  cur = { id, def, arg, node, strip, done, ring, timer, t: 0, ended: null, back, raf: 0, last: performance.now() };
+  const back = { x: R.cam.target?.x ?? 0, z: R.cam.target?.z ?? 0, zoom: R.cam.zoom, az: R.cam.azimuth, polar: off ? Math.acos(off.y / off.length()) : undefined };
+  cur = { id, def, arg, node, strip, done, ring, timer, t: 0, ended: null, back, raf: 0, last: performance.now(), endLeft: 0 };
   const K = cur.K = makeKit(api, cur);
   // the subject sits in the clear area between the hint strip and the bottom of the screen (the tray is away)
   const top = strip.getBoundingClientRect().bottom + 8;
   R.cam.setInset(0, top);
   const f = def.frame(s, arg);
-  R.cam.glide(f.x, f.z, R.cam.zoomFor(f.fit), api.settings.reduceMotion ? 0 : 450, f.az, f.polar);
+  R.cam.glide(f.x, f.z, R.cam.zoomFor?.(f.fit), api.settings.reduceMotion ? 0 : 450, f.az, f.polar);
   K.hint(def.hint(s, arg), def.speaker);
   // a verb that can't start must not leave the clock held under an empty overlay
   try { def.start(K, arg); } catch (e) { console.error('[hands]', e); closeHands(api, cur); return false; }
   node.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('button') || cur?.ended) return;
+    if ((e.target instanceof Element && e.target.closest('button')) || cur?.ended) return;
     e.preventDefault();
     api.markTouched();
     def.down({ x: e.clientX, y: e.clientY }, K);
@@ -72,44 +97,46 @@ export function openHands(api: Api, id: string, arg: unknown) {
   return true;
 }
 
-function makeKit(api: Api, c: { id?: any; def: any; arg: any; node: any; strip: any; done?: HTMLElement; ring?: HTMLElement; timer: any; t: any; ended: any; back?: { x: number; z: number; zoom: number|undefined; az: number|undefined; polar: number|undefined; }; raf?: number; last?: number; endLeft?: any; }) {
+function makeKit(api: Api, c: HandsCur) {
   const R = api.R;
-  const K = {
+  const K: HandsKit = {
     api, R, arg: c.arg, timer: c.timer,
     left: () => Math.max(0, c.timer - c.t),
-    hint(text: string, speaker: string) {
-      const face = c.strip.querySelector('.hands-face');
-      face.replaceChildren(...(speaker ? [portraitEl(api, speaker, api.s(), 'small')] : []));
-      c.strip.querySelector('.hands-text').textContent = text;
+    hint(text: string, speaker?: string) {
+      const face = c.strip.querySelector('.hands-face'), t = c.strip.querySelector('.hands-text');
+      face?.replaceChildren(...(speaker ? [portraitEl(api, speaker, api.s(), 'small')] : []));
+      if (t) t.textContent = text;
       bump(c.strip, 'squash');
     },
-    count(text: any) { c.strip.querySelector('.hands-count').textContent = text; },
-    combo(text: string, at: { x: any; y: any; }) {
-      const n = c.node.querySelector('.hands-combo');
+    count(text: string) { const n = c.strip.querySelector('.hands-count'); if (n) n.textContent = text; },
+    combo(text: string, at?: { x: number; y: number }) {
+      const n = c.node.querySelector<HTMLElement>('.hands-combo');
+      if (!n) return;
       n.textContent = text || '';
       n.classList.toggle('on', !!text);
       if (!text) return;
       n.style.transform = `translate(${Math.round(at?.x ?? innerWidth / 2)}px, ${Math.round((at?.y ?? innerHeight / 2) - 60)}px)`;
       n.classList.remove('hit'); void n.offsetWidth; n.classList.add('hit');
     },
-    big(text: any, cls = '') { const n = c.node.querySelector('.hands-big'); n.textContent = text; n.className = `hands-big on ${cls}`.trim(); },
-    project: (x: number, y: number, z: number) => R.project(x, y, z),
-    ground(px: number, py: number) { const h = R.pick?.(px, py); return h && h.x != null ? { x: h.x, z: h.z } : null; },
+    big(text: string, cls = '') { const n = c.node.querySelector<HTMLElement>('.hands-big'); if (n) { n.textContent = text; n.className = `hands-big on ${cls}`.trim(); } },
+    project: (x, y, z) => R.project(x, y, z),
+    ground(px, py) { const h = R.pick(px, py); return h && h.x != null ? { x: h.x, z: h.z } : null; },
     juice: {
-      ripple: (x: any, z: any, color: any) => R.fx({ type: 'ripple', x, z, color }),
-      pop: (x: any, y: any, z: any, color: any, n: any, sparkles = 0) => R.fx({ type: 'pop', x, y, z, color, n, sparkles }),
-      sparkle: (x: any, y: any, z: any, n: any) => R.fx({ type: 'sparkle', x, y, z, n }),
-      float: (text: any, x: any, y: any, z: any, cls: any) => R.fx({ type: 'float', text, x, y, z, cls }),
+      ripple: (x, z, color) => R.fx({ type: 'ripple', x, z, color }),
+      pop: (x, y, z, color, n, sparkles = 0) => R.fx({ type: 'pop', x, y, z, color, n, sparkles }),
+      sparkle: (x, y, z, n) => R.fx({ type: 'sparkle', x, y, z, n }),
+      float: (text, x, y, z, cls) => R.fx({ type: 'float', text, x, y, z, cls }),
       // a pitch-stepped blip: a semitone a step, at most +7
-      blip: (name: string, step = 0) => api.sound(name, { pitch: 2 ** (Math.min(7, Math.max(0, step)) / 12) }),
-      buzz: (ms: number) => api.haptic(Math.max(6, Math.min(10, ms))),
+      blip: (name, step = 0) => api.sound(name, { pitch: 2 ** (Math.min(7, Math.max(0, step)) / 12) }),
+      buzz: (ms) => api.haptic(Math.max(6, Math.min(10, ms))),
     },
     // the verb is over: its one action, the ending, then the clock goes again
     end(reason: string) {
       if (c.ended || cur !== c) return;
       c.ended = reason;
       c.node.classList.add('ending');
-      const res = api.dispatch({ ...c.def.finish(K), quiet: true });
+      const fin = c.def.finish(K);
+      const res: ActionResult & { events: OutEvent[] } = fin ? api.dispatch({ ...fin, quiet: true }) : { ok: false, reason: 'finish returned null', events: [] };
       c.def.ended?.(res, K, reason);
       c.endLeft = (reason === 'done' ? 250 : END_MS) / 1000;
     },
@@ -117,10 +144,10 @@ function makeKit(api: Api, c: { id?: any; def: any; arg: any; node: any; strip: 
   return K;
 }
 
-function closeHands(api: Api, c: { id?: any; def: any; arg?: any; node: any; strip?: HTMLElement; done?: HTMLElement; ring?: HTMLElement; timer?: any; t?: number; ended?: null; back: any; raf: any; last?: number; K?: any; }) {
+function closeHands(api: Api, c: HandsCur) {
   if (cur !== c) return;
   cancelAnimationFrame(c.raf);
-  c.def.close?.(c.K);
+  if (c.K) c.def.close?.(c.K);
   cur = null;
   api.dispatch({ type: 'hands/close', quiet: true });
   c.node.classList.add('out');

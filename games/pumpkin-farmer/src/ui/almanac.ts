@@ -6,7 +6,6 @@ import { registerSheet, registerStation, registerTap } from './registry.js';
 import { chip, word, inShare } from '../sim/weather.js';
 import { label, dowName, dayOf, weekends, isWeekend, isSaturday, weekendIndex, WEIGHOFF, HALLOWEEN } from '../sim/calendar.js';
 import { shelf } from '../sim/patch.js';
-import { isActive } from '../sim/events.js';
 import { LINES } from '../sim/story.js';
 import { ledgerNet } from '../sim/economy.js';
 import { whoToExpect } from '../sim/mischief.js';
@@ -29,7 +28,7 @@ function forecast(s: State) {
   if (!fc.length) return el('div.empty-note', { html: `${icon('radio')}<span>Hal is off the air until spring.</span>` });
   return el('div.fc', {}, fc.map((d, k) => el('div.fcday', { class: d.heat ? 'heat' : null },
     d.heat ? el('span.flag', { text: 'HEAT' }) : d.rain ? el('span.flag.rain', { text: 'RAIN' }) : null,
-    el('div.d', { text: k === 0 ? 'Tomorrow' : dowName(d.day, true).slice(0, 3) + ' ' + label(d.day).split(' ')[1] }),
+    el('div.d', { text: k === 0 ? 'Tomorrow' : dowName(d.day, true).slice(0, 3) + ' ' + (label(d.day).split(' ')[1] ?? '') }),
     el('div', { html: icon(weatherIcon(d.f, d.heat, d.rain)) }),
     el('div.w', { text: d.heat ? 'Heat' : word(d.f) }),
     // [C] plain words (rulings R11): "give or take", never ±
@@ -52,7 +51,7 @@ function sparkline(s: State) {
   const share = inShare(s, Math.min(s.clock.day, 213));
   return el('div', {}, el('div', { html: svg }),
     el('div.spark-legend', {}, ...['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct'].map((m) => el('span', { text: m }))),
-    el('div.muted', { style: { marginTop: '6px', fontWeight: 700, fontSize: 'var(--fs-s)' }, text: `Marlene has been in on ${Math.round(share * 100)}% of days this year.` }));
+    el('div.muted', { style: { marginTop: '6px', fontWeight: '700', fontSize: 'var(--fs-s)' }, text: `Marlene has been in on ${Math.round(share * 100)}% of days this year.` }));
 }
 // The October calendar: Oct 1 is always a Thursday; the four weekends sized by their crowds. [C] Plain words (rulings R11):
 // the crowd numbers and next year's items stay hidden until Gran opens the Planting Table (they mean nothing before it);
@@ -66,7 +65,7 @@ function october(s: State) {
     const n = d - first + 1, wi = weekendIndex(d), past = s.clock.phase !== 'winter' && d < s.clock.day;
     const cls = [isWeekend(d) ? 'wk' : '', d === WEIGHOFF ? 'wo' : '', d === HALLOWEEN ? 'hw' : '', past ? 'past' : '', d === s.clock.day && s.clock.phase !== 'winter' ? 'today' : ''].filter(Boolean).join(' ');
     const tag = d === WEIGHOFF ? 'WEIGH' : d === HALLOWEEN ? 'BOO' : wi >= 0 ? `W${wi + 1}` : '';
-    const crowd = wi >= 0 ? 0.1 + 0.32 * (T.calendar.weekends[wi].mult - 0.6) : null;   // deeper orange = bigger crowds
+    const crowd = wi >= 0 ? 0.1 + 0.32 * ((T.calendar.weekends[wi]?.mult ?? 0.6) - 0.6) : null;   // deeper orange = bigger crowds
     const crate = wi >= 0 && crates ? crates[wi] : null;
     grid.append(el('div.c', { class: cls || null, title: label(d), style: crowd ? { '--crowd': crowd.toFixed(2) } : null }, el('span', { text: n }), tag ? el('small', { text: tag }) : null,
       crate && isSaturday(d) ? el('i.crate', { class: `l${crate.level}`, title: `W${wi + 1}'s crate` }) : null));
@@ -82,9 +81,12 @@ function october(s: State) {
 function expect(s: State) {
   if (s.clock.phase !== 'grow') return null;
   const days = [{ day: s.clock.day, f: s.weather.f, rain: s.weather.rain }, ...(s.weather.forecast || [])];
-  const chips = days.map((d, k) => [d, k, whoToExpect(s, d)]).filter(([, , x]) => x).map(([d, k, x]) => el('div.xchip', {},
-    el('span.when', { text: k === 0 ? 'Today' : k === 1 ? 'Tomorrow' : dowName(d.day, true).slice(0, 3) }), el('b', { text: x.word }),
-    x.who ? el('span.who', { text: x.who }) : null));
+  const chips = days.flatMap((d, k) => {
+    const x = whoToExpect(s, d);
+    return x ? [el('div.xchip', {},
+      el('span.when', { text: k === 0 ? 'Today' : k === 1 ? 'Tomorrow' : dowName(d.day, true).slice(0, 3) }), el('b', { text: x.word }),
+      x.who ? el('span.who', { text: x.who }) : null)] : [];
+  });
   return chips.length ? el('div.expect', {}, chips) : null;
 }
 const CROWD_WORDS = ['quiet', 'busy', 'busier', 'packed'];
@@ -100,20 +102,21 @@ function later(s: State) {
   return rows;
 }
 
+let almanacSig: string | null = null;
 registerSheet('almanac', {
   eyebrow: () => 'KQSC 46.0 · The Ridge',
   title: () => 'Almanac',
-  build(body, s: State, arg, api: Api) {
-    this._sig = null; this.update(body, s, arg, api);
+  build(body, s: State, _arg, api: Api) {
+    almanacSig = null; this.update?.(body, s, _arg, api);
     if (s.story.goal?.id === 'marlene') api.dispatch({ type: 'story/goalDone', id: 'marlene' });
   },
   update(body, s: State) {
     const sig = `${s.clock.year}|${s.clock.day}|${s.clock.phase}|${s.weather.f}|${!!s.unlocks.marlene}|${Object.keys(s.mischief?.met || {}).join()}|${!!s.unlocks.patch}|${(s.patch?.rows || []).map((r) => (r.plan ? 'p' : r.plantedDay != null ? 'i' : '-')).join('')}`;
-    if (sig === this._sig) return;
-    this._sig = sig;
+    if (sig === almanacSig) return;
+    almanacSig = sig;
     const top = body.scrollTop;
     body.innerHTML = '';
-    const sec = (title: string, ic: string, ...kids: any[]) => el('div.section', {}, el('div.eyebrow', { html: `${icon(ic, 's')}${title}` }), ...kids);
+    const sec = (title: string, ic: string, ...kids: (HTMLElement | null)[]) => el('div.section', {}, el('div.eyebrow', { html: `${icon(ic, 's')}${title}` }), ...kids);
     // the fog report, Hal's forecast and Marlene's year mean nothing until Hal has introduced her (plan §3.6, rulings R11):
     // before that the Almanac says when the report starts, without naming anyone the player hasn't met
     const met = !!s.unlocks.marlene;
@@ -133,16 +136,17 @@ registerStation({ id: 'almanac', label: 'Almanac', icon: 'almanac', order: 90, k
   visible: (s: State) => s.clock.phase === 'grow' || s.clock.sub === 'weekday' || s.clock.phase === 'winter', onTap: (api: Api) => api.openSheet('almanac') });
 
 // ------------------------------------------------------------ Ledger (the winter slice adds report cards)
+let ledgerSig: string | null = null;
 registerSheet('ledger', {
   eyebrow: (s: State) => `Year ${s.ledger.year.y}`,
   title: () => 'Ledger',
-  build(body, s) { this._sig = null; this.update(body, s); },
+  build(body, s) { ledgerSig = null; this.update?.(body, s); },
   update(body, s: State) {
     const L = s.ledger.year, sig = JSON.stringify(L) + s.ledger.history.length;
-    if (sig === this._sig) return;
-    this._sig = sig;
+    if (sig === ledgerSig) return;
+    ledgerSig = sig;
     body.innerHTML = '';
-    const rows = (obj: { [s: string]: unknown; }|ArrayLike<unknown>, neg?: boolean|undefined) => Object.entries(obj).sort((a, b) => b[1] - a[1]).map(([k, v]) => el('div.ledger-row', {}, el('span', { text: k[0].toUpperCase() + k.slice(1) }), el('span.v', { class: neg ? 'neg' : null, text: (neg ? '−' : '') + fmt.cents(v) })));
+    const rows = (obj: Record<string, number>, neg?: boolean) => Object.entries(obj).sort((a, b) => b[1] - a[1]).map(([k, v]) => el('div.ledger-row', {}, el('span', { text: k.charAt(0).toUpperCase() + k.slice(1) }), el('span.v', { class: neg ? 'neg' : null, text: (neg ? '−' : '') + fmt.cents(v) })));
     const inc = rows(L.income), exp = rows(L.expense, true);
     body.append(
       el('div.section', {}, el('div.eyebrow', { text: 'Income' }), inc.length ? inc : el('div.empty-note', { text: 'Nothing sold yet. October is coming.' })),
@@ -166,5 +170,5 @@ registerSheet('record', {
         : el('div.empty-note', { text: 'Grandpa won this scale in a bet in \'79. Your first weigh-off is Mon Oct 26.' })));
   },
 });
-registerTap('scale', (hit, api) => api.openSheet('record'));
+registerTap('scale', (_hit, api) => api.openSheet('record'));
 // (the growing-season whale is a delight now: its gold ✦ pin is track A's, ui/mischief.js)

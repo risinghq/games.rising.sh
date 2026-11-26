@@ -7,38 +7,37 @@
 import { registerEvent, registerPin } from './registry.js';
 import { PLACES, ROWS, rowZ } from '../sim/layout.js';
 import { T } from '../sim/tuning.js';
-import type { OutEvent, State } from '../sim/types.js';
 import type { Api } from './types.js';
 
 const GIANT = { x: PLACES.giant.x, z: PLACES.giant.z };
-const rowMid = (r: unknown) => ({ x: (ROWS.x0 + ROWS.x1) / 2, z: rowZ(r) });
+const rowMid = (r: number) => ({ x: (ROWS.x0 + ROWS.x1) / 2, z: rowZ(r) });
 
 // With a sheet open the banner sits on top of it, which is where a dialogue card hangs down from the HUD: the banner waits
 // (a few seconds at most) for the line to finish, so the two never overlap (rulings R12).
-function whenClear(api: Api, fn: { (): void; (): void; }, waited = 0) {
+function whenClear(api: Api, fn: () => void, waited = 0) {
   const busy = document.body.classList.contains('talking') && !!api.currentSheet();
   if (busy && waited < T.ui.banner.maxMs) setTimeout(() => whenClear(api, fn, waited + 250), 250);
   else fn();
 }
 
-registerEvent('first', (ev: OutEvent, api: Api) => {
-  whenClear(api, () => api.payoff({ title: ev.title, sub: ev.sub, stamp: ev.stamp, big: ev.big, speaker: ev.speaker, line: ev.line, glide: ev.glide }));
+registerEvent('first', (ev, api) => {
+  whenClear(api, () => api.payoff({ title: ev.title, sub: ev.sub ?? undefined, stamp: ev.stamp, big: ev.big, speaker: ev.speaker ?? undefined, line: ev.line ?? undefined, glide: ev.glide ?? undefined }));
   const fx = api.R?.fx;
   if (!fx) return;
   if (ev.at === 'giant' || ev.at === 'pot' || ev.at === 'sign') fx({ type: 'sparkle', x: GIANT.x, y: ev.at === 'pot' ? 0.7 : 1.4, z: GIANT.z, n: ev.big ? 16 : 9 });
   if (ev.at === 'row' && ev.row) {
     const p = rowMid(ev.row - 1);
-    fx({ type: ev.id === 'ripe' ? 'pop' : 'dust', x: p.x, z: p.z, color: ev.id === 'ripe' ? 0xe0843a : undefined, n: 8 });
+    fx(ev.id === 'ripe' ? { type: 'pop', x: p.x, z: p.z, color: 0xe0843a, n: 8 } : { type: 'dust', x: p.x, z: p.z, n: 8 });
     fx({ type: 'sparkle', x: p.x, y: 0.5, z: p.z, n: 8 });
   }
   if (ev.id === 'lb1147') for (let i = 0; i < 3; i++) setTimeout(() => fx({ type: 'sparkle', x: GIANT.x, y: 2, z: GIANT.z, n: 14 }), i * 300);
 });
 
 // a note from the biscuit tin: the sound of paper
-registerEvent('note', (ev, api: Api) => { api.sound('plink', { pitch: 1.6 }); api.haptic(8); });
+registerEvent('note', (_ev, api) => { api.sound('plink', { pitch: 1.6 }); api.haptic(8); });
 
 // a note left by the stand (no quiet moment came for it): tap to read
 registerPin({ id: 'note-porch', icon: 'scrapbook', label: "A note from Grandpa's biscuit tin",
-  when: (s: State) => (s.pokes?.pile?.length ?? 0) > 0 && s.clock.phase === 'grow',
+  when: (s) => (s.pokes?.pile?.length ?? 0) > 0 && s.clock.phase === 'grow',
   pos: () => ({ x: PLACES.gran.x, y: 1.5, z: PLACES.gran.z }),
-  onTap: (api: Api) => api.dispatch({ type: 'pokes/read' }) });
+  onTap: (api) => api.dispatch({ type: 'pokes/read' }) });

@@ -3,7 +3,7 @@
 import type { Action, ActionResult, Card, OutEvent, State } from '../sim/types.js';
 import type { StoryGoal } from '../sim/state.js';
 import type { Game } from '../sim/game.js';
-import type { Renderer, Hit } from '../render/types.js';
+import type { Renderer, Hit, Projected } from '../render/types.js';
 import type { DEFAULT_SETTINGS } from './app.js';
 
 export type Settings = typeof DEFAULT_SETTINGS;
@@ -96,6 +96,7 @@ export interface PinDef {
   pos(s: State): At | null;
   onTap(api: Api): void;
   urgent?(s: State): boolean;
+  cls?: string;
 }
 /** What registered UI handlers hear: the sim's out-events and the UI's own. */
 export type UiEvent = OutEvent | { type: 'ui/idle'; n: number };
@@ -115,15 +116,50 @@ export interface ScreenDef {
 export type KeyHandler = (api: Api, e: KeyboardEvent) => void;
 export type PlanningWhen = (s: State, arg: unknown) => boolean;
 export interface EventStyle { cls?: string; ic?: string }
+/** The kit a hands-on close-up's verb is given (hands.ts makeKit). */
+export interface HandsKit {
+  api: Api;
+  R: Renderer;
+  arg: unknown;
+  /** seconds left on the ring */
+  timer: number;
+  /** seconds left on the ring */
+  left(): number;
+  hint(text: string, speaker?: string): void;
+  count(text: string): void;
+  combo(text: string, at?: { x: number; y: number }): void;
+  big(text: string, cls?: string): void;
+  /** world to screen: container-relative CSS px */
+  project(x: number, y: number, z: number): Projected;
+  /** screen px to the world point under the finger, or null */
+  ground(px: number, py: number): { x: number; z: number } | null;
+  juice: {
+    ripple(x: number, z: number, color?: number): void;
+    pop(x: number, y: number, z: number, color?: number, n?: number, sparkles?: number): void;
+    sparkle(x: number, y: number, z: number, n?: number): void;
+    float(text: string, x: number, y: number, z: number, cls?: string): void;
+    blip(name: string, step?: number): void;
+    buzz(ms: number): void;
+  };
+  /** ends the close-up: the finish action is dispatched, the ending shows, the camera goes back */
+  end(reason: string): void;
+}
+
+/** A hands-on close-up verb; the sim side is hands/open { verb } and hands/close. */
 export interface HandsDef {
   id: string;
-  frame(s: State): unknown;
-  hint(s: State): string;
-  timer?: number;
-  start(api: Api, arg: unknown): void;
-  down(e: PointerEvent): void;
-  move(e: PointerEvent): void;
-  up(e: PointerEvent): void;
-  update(dt: number): void;
-  finish(): Action | null;
+  /** whose face the hint strip shows */
+  speaker?: string;
+  /** where the camera frames the subject */
+  frame(s: State | null, arg: unknown): { x: number; z: number; fit: number; az?: number; polar?: number };
+  hint(s: State | null, arg: unknown): string;
+  /** seconds on the ring; no timer means none */
+  timer?(api: Api): number;
+  start(K: HandsKit, arg: unknown): void;
+  down(pt: { x: number; y: number }, K: HandsKit): void;
+  update(dt: number, K: HandsKit): void;
+  /** the action the ending dispatches; null means nothing to dispatch */
+  finish(K: HandsKit): Action | null;
+  ended?(res: ActionResult & { events: OutEvent[] }, K: HandsKit, reason: string): void;
+  close?(K: HandsKit): void;
 }
