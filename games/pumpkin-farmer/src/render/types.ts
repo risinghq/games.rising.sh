@@ -74,8 +74,14 @@ export interface LocalFx {
   'hunt/start': { row: number; hunt: Hunt };
   'hunt/end': object;
   'giant/tin': { step: number };
+  'weighoff/beat': { k: number; n: number; grade: 'perfect' | 'good' | 'wobble' };
+  'weighoff/eyes': { k: number; caught?: boolean } & (
+    | { on: true; x: number; y: number; z: number }
+    | { on: false; x?: number; y?: number; z?: number });
+  'weighoff/readout': { text: string; label?: string };
+  'weighoff/reveal': { phase: 'read' | 'count' | 'lock' | 'hold' | 'done'; heavy?: boolean; light?: boolean; exhibition?: boolean };
   /** The carved face, drawn on a mask canvas in the winter UI (ui/winter.js). */
-  'winter/carve': { canvas: HTMLCanvasElement };
+  'winter/carve': { canvas?: HTMLCanvasElement | null };
 }
 type LocalFxType = keyof LocalFx;
 /** What R.fx and every view hear: the sim's out-events and the UI's local effects. */
