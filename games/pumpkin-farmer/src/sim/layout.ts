@@ -3,18 +3,21 @@
 // and to register tap hitboxes. World units: the tile spans x, z in [-20, 20]; y is up; land ends at
 // x = 8.5, then beach to x = 11.5, then sea. Pure data plus a few pure helpers.
 
+export interface Pt { x: number; z: number }
+export interface PathNode extends Pt { id: string }
+
 export const TILE = { half: 20, landE: 8.5, shoreE: 11.5 };
 
 // ---------------------------------------------------------------- the patch
 // Seven rows, one variety and one planting date each. Row 0 (z = -1) is the front of the store,
 // nearest the lane, the gate and the stand. Rows 0-3 are tilled in year 1, rows 4-6 start as bramble.
 export const ROWS = { count: 7, x0: -9.6, x1: 6.6, half: 0.95 };
-export const rowZ = (r) => -1 + 2 * r;
+export const rowZ = (r: number) => -1 + 2 * r;
 // families pick from the aisle in front of a row (row 0's "aisle" is the headland inside the gate)
-export const aisleZ = (r) => rowZ(r) - 1;
-export const PICK_X = [-8, -5, -2, 1, 4];
-export const pickSpot = (r, k) => ({ x: PICK_X[((k % PICK_X.length) + PICK_X.length) % PICK_X.length], z: aisleZ(r) });
-export const rowAt = (x, z) => {
+export const aisleZ = (r: number) => rowZ(r) - 1;
+export const PICK_X = [-8, -5, -2, 1, 4] as const;
+export const pickSpot = (r: number, k: number): Pt => ({ x: PICK_X[((k % PICK_X.length) + PICK_X.length) % PICK_X.length] ?? PICK_X[0], z: aisleZ(r) });
+export const rowAt = (x: number, z: number) => {
   if (x < ROWS.x0 || x > ROWS.x1) return -1;
   const r = Math.round((z + 1) / 2);
   return r >= 0 && r < ROWS.count && Math.abs(z - rowZ(r)) < ROWS.half ? r : -1;
@@ -35,7 +38,7 @@ export const PLACES = {
   readout: { x: -14.9, z: 15.55 },
   weighmaster: { x: -13.2, z: 17.4 },
   pallets: { x0: -12, x1: -4, z: 17.6 },                              // rivals' giants line the north fence
-  hives: [[-7.2, -16.2], [-5.6, -16.4], [-4.0, -16.1], [-2.4, -16.3], [-8.8, -16.2], [-0.8, -16.3]], // 4 built, 2 extra spots
+  hives: [[-7.2, -16.2], [-5.6, -16.4], [-4.0, -16.1], [-2.4, -16.3], [-8.8, -16.2], [-0.8, -16.3]] satisfies [number, number][], // 4 built, 2 extra spots
   hivesRect: [-9.4, -17, -0.2, -15.5],
   maze: { x0: 0.3, z0: -19.8, x1: 8.3, z1: -7.4, entrance: { x: 4.3, z: -7.6 } },
   hayfort: { x: -8.2, z: -11.6 },
@@ -75,7 +78,12 @@ export const VINE_SPOTS = {
 // [D] poke targets that aren't tap zones yet (corn, dock, sea, cottage, the giant's sign), each >= 44 px at Home zoom
 // (plan §3.4): { kind: 'poke', id, circle | rect, priority }. They join ZONES below.
 // (Small ones are fine at Home zoom: the nearest box within 24 px of the finger wins, so each is at least 48 px wide.)
-export const POKE_ZONES = [
+/** A tap zone in XZ: a circle [x, z, r] or a rectangle [x0, z0, x1, z1], with an optional height range [y0, y1]. */
+export type Zone = { kind: string; id: string | number; y?: [number, number]; priority?: number; enabled?: boolean } & (
+  | { circle: [number, number, number]; rect?: undefined }
+  | { rect: [number, number, number, number]; circle?: undefined });
+
+export const POKE_ZONES: Zone[] = [
   { kind: 'poke', id: 'corn', rect: [0.3, -19.8, 8.3, -7.4], priority: 1 },          // the maze
   { kind: 'poke', id: 'dock', rect: [9.8, 5.35, 16.4, 6.65], priority: 3 },
   { kind: 'poke', id: 'sea', rect: [11.6, -11, 20, 20], priority: 0 },              // the boat, dock and whale win over it
@@ -99,7 +107,8 @@ export const MISCHIEF_ENTRY = {
 // ---------------------------------------------------------------- tap zones (design §12)
 // Analytic hitboxes in XZ. Higher priority wins when several are within reach. (The Weighmaster's toy hitbox
 // is added by render/cast.js only while he is on the farm: weigh-off day.)
-export const ZONES = [
+const rowZone = (r: number): Zone => ({ kind: 'row', id: r, rect: [ROWS.x0, rowZ(r) - ROWS.half, ROWS.x1, rowZ(r) + ROWS.half], priority: 1 });
+export const ZONES: Zone[] = [
   { kind: 'giant', id: 'giant', circle: [-15.5, 9, 3.4], priority: 3 },
   { kind: 'stand', id: 'stand', rect: [-6.8, -8.6, -3.2, -6.0], priority: 3 },
   { kind: 'barn', id: 'barn', rect: [-17.6, -17.1, -10.4, -10.9], priority: 2 },
@@ -109,7 +118,7 @@ export const ZONES = [
   { kind: 'toy', id: 'lighthouse', circle: [16.6, -16.2, 1.5], priority: 4 },
   { kind: 'toy', id: 'scarecrow', circle: [-1.6, 6, 0.6], priority: 4 },
   { kind: 'toy', id: 'boat', circle: [14.6, 8, 1.0], priority: 4 },
-  ...Array.from({ length: 7 }, (_, r) => ({ kind: 'row', id: r, rect: [ROWS.x0, rowZ(r) - ROWS.half, ROWS.x1, rowZ(r) + ROWS.half], priority: 1 })),
+  ...Array.from({ length: 7 }, (_, r) => rowZone(r)),
   ...POKE_ZONES,
 ];
 
@@ -126,8 +135,8 @@ export const ROAD = {
   west: -21, north: -21,                         // out of the fog; back into it up the beach
   // where each side bends north (x) and its radius: the beach road's lanes run at x 10.05 and 8.75, between the corn and
   // the sea, the stand's side round first so the two never run abreast in their bends
-  bend: { patch: [8.1, 1.95], stand: [7.4, 1.35] },
-  front: [-5.75, 6.6],                           // the patch's open front (x from, to)
+  bend: { patch: [8.1, 1.95] satisfies [number, number], stand: [7.4, 1.35] satisfies [number, number] },
+  front: [-5.75, 6.6] satisfies [number, number],                         // the patch's open front (x from, to)
   // the spaces on each side, front (east) first: the drop-off along the patch's open front; the pick-up, a step from the
   // till and just past the little gate (the nearest the fog it can be without a long walk back along the line)
   stops: { patch: [3.45, 1.35, -0.75, -2.85, -4.95], stand: [-2.6, -4.7] },
@@ -138,22 +147,22 @@ export const ROAD = {
   sand: { x: 9.85, at: 7.7, turn: 0.85, bay: 0.7, join: -2.6, joinAt: 0.87, spots: [-2.3, -1.2, -0.1, 1.0] },
   // where folks cross (x from, to): the giant's path, the patch's west path (and the grass to the giant), the little
   // gate, the patch's east path (and the way to the beach). A car never stops on one.
-  crossings: [[-16.1, -14.9], [-11.5, -10.0], [-6.75, -5.75], [6.8, 8.0]],
+  crossings: [[-16.1, -14.9], [-11.5, -10.0], [-6.75, -5.75], [6.8, 8.0]] satisfies [number, number][],
 };
 
 // ---------------------------------------------------------------- path graph
 // Families and the farmer walk on this graph (the prototype's PATHS plus the patch aisles).
-const N = {};
-const node = (id, x, z) => (N[id] = { id, x, z });
-const E = [];
-const edge = (a, b) => E.push([a, b]);
+const N: Record<string, PathNode> = {};
+const node = (id: string, x: number, z: number) => (N[id] = { id, x, z });
+const E: [string, string][] = [];
+const edge = (a: string, b: string) => E.push([a, b]);
 
 // the lane's footpath, west (in the fog) to the patch's east path (the beach road runs north past its end)
 node('west', -21, ROAD.walk);
-const LANE = [['lot', -18.5], ['l_giant', -15.5], ['l_barn', -14], ['l_patchW', -10.6], ['l_hay', -8.2], ['l_stand', -6.25], ['l_gate', -0.8], ['l_maze', 4.3], ['l_patchE', 7.4]];
+const LANE: [string, number][] = [['lot', -18.5], ['l_giant', -15.5], ['l_barn', -14], ['l_patchW', -10.6], ['l_hay', -8.2], ['l_stand', -6.25], ['l_gate', -0.8], ['l_maze', 4.3], ['l_patchE', 7.4]];
 LANE.forEach(([id, x]) => node(id, x, ROAD.walk));
 edge('west', 'lot');
-for (let i = 0; i < LANE.length - 1; i++) edge(LANE[i][0], LANE[i + 1][0]);
+LANE.slice(1).forEach(([id], i) => edge(LANE[i]![0], id));
 // stand, corral, barn, maze, hay fort, hives, beach
 node('stand', -5, -6.5); edge('l_stand', 'stand');
 node('corral', -3, -6.3); edge('stand', 'corral'); edge('l_stand', 'corral');
@@ -189,36 +198,47 @@ edge(`aw${ROWS.count - 1}`, 'backW'); edge(`ae${ROWS.count - 1}`, 'backE'); edge
 
 export const NODES = N;
 export const EDGES = E;
-const ADJ = {};
+// Every edge names two nodes built above; a typo is a load-time error, not a NaN route.
+export const nodeAt = (id: string) => {
+  const n = N[id];
+  if (!n) throw new Error(`layout: no node ${id}`);
+  return n;
+};
+const ADJ: Record<string, [string, number][]> = {};
 for (const [a, b] of E) {
-  const d = Math.hypot(N[a].x - N[b].x, N[a].z - N[b].z);
+  const d = Math.hypot(nodeAt(a).x - nodeAt(b).x, nodeAt(a).z - nodeAt(b).z);
   (ADJ[a] ||= []).push([b, d]); (ADJ[b] ||= []).push([a, d]);
 }
 
 // Shortest route between two nodes (Dijkstra; the graph is tiny). Returns [{ x, z, id }, ...] including both ends.
-const routeCache = new Map();
-export function route(from, to) {
+const routeCache = new Map<string, PathNode[]>();
+export function route(from: string, to: string): PathNode[] {
   const key = from + '>' + to;
-  if (routeCache.has(key)) return routeCache.get(key);
-  const dist = { [from]: 0 }, prev = {}, open = new Set([from]);
+  const hit = routeCache.get(key);
+  if (hit) return hit;
+  const dist = new Map<string, number>([[from, 0]]), prev = new Map<string, string>(), open = new Set([from]);
   while (open.size) {
-    let u = null;
-    for (const n of open) if (u === null || dist[n] < dist[u]) u = n;
+    let u: string | null = null, du = Infinity;
+    for (const n of open) { const dn = dist.get(n) ?? Infinity; if (u === null || dn < du) { u = n; du = dn; } }
+    if (u === null) break;
     open.delete(u);
     if (u === to) break;
-    for (const [v, w] of ADJ[u] || []) {
-      const d = dist[u] + w;
-      if (dist[v] === undefined || d < dist[v]) { dist[v] = d; prev[v] = u; open.add(v); }
+    for (const [v, w] of ADJ[u] ?? []) {
+      const d = du + w, dv = dist.get(v);
+      if (dv === undefined || d < dv) { dist.set(v, d); prev.set(v, u); open.add(v); }
     }
   }
-  const out = [];
-  if (dist[to] !== undefined) for (let n = to; n !== undefined; n = prev[n]) out.unshift({ id: n, x: N[n].x, z: N[n].z });
+  const out: PathNode[] = [];
+  if (dist.has(to)) for (let n: string | undefined = to; n !== undefined; n = prev.get(n)) out.unshift({ id: n, x: nodeAt(n).x, z: nodeAt(n).z });
   routeCache.set(key, out);
   return out;
 }
-export const routeLength = (pts) => pts.reduce((a, p, i) => (i ? a + Math.hypot(p.x - pts[i - 1].x, p.z - pts[i - 1].z) : 0), 0);
-export function nearestNode(x, z, filter) {
-  let best = null, bd = Infinity;
+export const routeLength = (pts: readonly Pt[]) => pts.reduce((a, p, i) => {
+  const q = pts[i - 1];
+  return q ? a + Math.hypot(p.x - q.x, p.z - q.z) : 0;
+}, 0);
+export function nearestNode(x: number, z: number, filter?: (n: PathNode) => boolean) {
+  let best: PathNode | null = null, bd = Infinity;
   for (const n of Object.values(N)) {
     if (filter && !filter(n)) continue;
     const d = (n.x - x) ** 2 + (n.z - z) ** 2;
@@ -228,4 +248,4 @@ export function nearestNode(x, z, filter) {
 }
 
 // Queue spots at the stand's counter, front of the line first, then back along the stand's front off the footpath.
-export const QUEUE = [[-5, -6.3], [-5.75, -6.05], [-6.45, -6.05], [-7.15, -6.05], [-7.85, -6.05], [-8.55, -6.05], [-9.25, -6.05], [-9.95, -6.05]].map(([x, z]) => ({ x, z }));
+export const QUEUE = ([[-5, -6.3], [-5.75, -6.05], [-6.45, -6.05], [-7.15, -6.05], [-7.85, -6.05], [-8.55, -6.05], [-9.25, -6.05], [-9.95, -6.05]] satisfies [number, number][]).map(([x, z]) => ({ x, z }));

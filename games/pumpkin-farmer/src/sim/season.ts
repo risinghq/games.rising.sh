@@ -54,33 +54,42 @@
 // Cross-slice helpers (exported): weekendNow(s), atStand(s), families(s), queueReady(s), roadMeter(s), parkingCap(s),
 //   expectedFamilies(s, d), tierMul(s), panicNight(s, ctx), seasonSummary(s), addFamily(s, ctx, opts), FARMER_SPOTS.
 import { T } from './tuning.js';
-import { dayOf, isWeekend as calWeekend, isSaturday, weekendIndex as calWeekendIndex, weekendMult, nextWeekendDay, dowName, label, OPEN, CLOSE, GATE_CLOSE, EVE } from './calendar.js';
-import { PLACES, NODES, EDGES, QUEUE, HIDEOUTS, ROAD, rowZ, aisleZ, PICK_X } from './layout.js';
+import type { SpeciesRow } from './tuning.js';
+import { dayOf, isSaturday, weekendIndex as calWeekendIndex, weekendMult, nextWeekendDay, dowName, label, OPEN, CLOSE, GATE_CLOSE, EVE } from './calendar.js';
+import type { PathNode } from './layout.js';
+import { PLACES, NODES, EDGES, QUEUE, HIDEOUTS, ROAD, aisleZ, PICK_X, nodeAt } from './layout.js';
 import * as traffic from './traffic.js';
-import { makeRng, next, pick, weighted } from './rng.js';
-import { clamp, round2, round3, hash32, fill, sum } from './util.js';
-import { has, count, hired, spend, canAfford } from './economy.js';
+import { makeRng, next, pick, Rng, weighted } from './rng.js';
+import { clamp, round2, round3, hash32, fill, sum, own, entries } from './util.js';
+import { has, count, hired, spend } from './economy.js';
 import { activate, deactivate, isActive, getActive, fireNow } from './events.js';
 import { LINES, SPECIES as NAMES } from './story.js';
 import * as patch from './patch.js';
 import * as giant from './giant.js';
-
+import type { SimModule, State, Ctx, Policy, ActionHandlers, ActionResult, Beat, DirectorEvent } from './types.js';
+import type { Action } from './action.js';
+import type { Car, SeasonFarmer, EventsActive, SeasonFarmerTask, Season, SeasonDay, SeasonTotals, Walker, Family, FamilyWant, FamilyKid, CrowdEntry } from './state.js';
 const S = T.season, SP = T.species, VT = T.varieties, CAT = T.events.cat, Y1 = T.story.y1, L = LINES.season;
-const dCache = new Map();
-const D = (x) => { if (typeof x === 'number') return x; let d = dCache.get(x); if (d === undefined) dCache.set(x, (d = dayOf(x))); return d; };
+const dCache = new Map<string, number>();
+const D = (x: string) => { let d = dCache.get(x); if (d === undefined) dCache.set(x, (d = dayOf(x))); return d; };
 const OCT1 = D('Oct 1');
 const SPECIES = SP.list;
-const LARGE = Object.keys(VT).filter((v) => VT[v].large);
-const fail = (reason) => ({ ok: false, reason });
-const u01 = (...k) => hash32(...k) / 4294967296;            // stable keyed noise: crowd draws never depend on the player
-const vname = (v) => patch.LINES.names[v] || v;
+const SPEC: Record<string, SpeciesRow> = Object.fromEntries(SPECIES.map((k) => [k, SP[k]]));
+const spec = (sp: string) => { const r = SPEC[sp]; if (!r) throw new Error(`season: no species ${sp}`); return r; };
+const unlockLarge = (v: string) => !!own(VT, v)?.large;
+const unlockYear = (v: string) => own(VT, v)?.unlock ?? Infinity;
+const LARGE = entries(VT).filter(([, sp]) => sp.large).map(([v]) => v);
+const fail = (reason: string) => ({ ok: false, reason });
+const u01 = (...k: (string|number)[]) => hash32(...k) / 4294967296;            // stable keyed noise: crowd draws never depend on the player
+const vname = (v: string) => own(patch.LINES.names, v) || v;
 const r3 = round3;
+const vt = (v: string) => own(VT, v) ?? VT.classic;
 // selling-weekend lookups by day (calendar's are a search; these run every minute for every family)
 const WK_INDEX = Array.from({ length: 400 }, (_, d) => calWeekendIndex(d));
-const weekendIndex = (d) => (d >= 0 && d < WK_INDEX.length ? WK_INDEX[d] : calWeekendIndex(d));
-const isWeekend = (d) => weekendIndex(d) >= 0;
-export const weekendNow = (s) => s.clock.phase === 'october' && isWeekend(s.clock.day) && !s.season?.offstage;
-const pinsOk = (s) => !!s.unlocks.pins || s.clock.year > 1;   // year 1: event pins wait for the W3 Sunday lesson
+const weekendIndex = (d: number) => (d >= 0 && d < WK_INDEX.length ? WK_INDEX[d] ?? calWeekendIndex(d) : calWeekendIndex(d));
+const isWeekend = (d: number) => weekendIndex(d) >= 0;
+export const weekendNow = (s: State) => s.clock.phase === 'october' && isWeekend(s.clock.day) && !s.season?.offstage;
+const pinsOk = (s: State) => !!s.unlocks.pins || s.clock.year > 1;   // year 1: event pins wait for the W3 Sunday lesson
 
 // ------------------------------------------------------------ the path graph (layout's, plus season shortcuts)
 // Folks cut straight through the patch in line with its two gates (x = -0.8 from the main gate, x = -5 from the stand's
@@ -90,109 +99,125 @@ const pinsOk = (s) => !!s.unlocks.pins || s.clock.year > 1;   // year 1: event p
 // straight across the yard to the barn door (2.2 s), the wagon straight from the barn door to the end of a front row,
 // from the stand's corner over the lane and past the patch's corner to the giant (3 s), and over the lane at the main
 // gate (the cars stop for you).
-const G = { ...NODES };
+const G: Record<string, PathNode> = { ...NODES };
 G.standSE = { id: 'standSE', x: -3.0, z: -8.8 };                    // round the back of the stand
 G.fenceW = { id: 'fenceW', x: -9.95, z: -3.25 };                    // the patch fence's west end
-G.g_tend = { id: 'g_tend', x: -12.7, z: 5.4 };                      // where your farmer tends the giant
-const EXTRA = [['aw5', 'g_view'], ['l_patchW', 'g_view'], ['gate', 'x0']];
-const FARMER_EXTRA = [['corral', 'standSE'], ['standSE', 'barn'], ['corral', 'fenceW'], ['fenceW', 'g_tend'], ['g_tend', 'g_se'],
-  ['g_tend', 'g_view'], ['corral', 'l_gate'], ['l_gate', 'gate'], ...[0, 1, 2, 3, 4].map((r) => ['barn', `aw${r}`])];
+const G_TEND = { id: 'g_tend', x: -12.7, z: 5.4 };
+G.g_tend = G_TEND;                      // where your farmer tends the giant
+const EXTRA: [string, string][] = [['aw5', 'g_view'], ['l_patchW', 'g_view'], ['gate', 'x0']];
+const FARMER_EXTRA: [string, string][] = [['corral', 'standSE'], ['standSE', 'barn'], ['corral', 'fenceW'], ['fenceW', 'g_tend'], ['g_tend', 'g_se'],
+  ['g_tend', 'g_view'], ['corral', 'l_gate'], ['l_gate', 'gate'], ...[0, 1, 2, 3, 4].map((r): [string, string] => ['barn', `aw${r}`])];
 for (let r = 0; r < 7; r++) {
-  G[`x${r}`] = { id: `x${r}`, x: NODES.gate.x, z: aisleZ(r) };
+  G[`x${r}`] = { id: `x${r}`, x: nodeAt('gate').x, z: aisleZ(r) };
   EXTRA.push([`x${r}`, `p${r}_2`], [`x${r}`, `p${r}_3`]);
   if (r) EXTRA.push([`x${r - 1}`, `x${r}`], [`p${r - 1}_1`, `p${r}_1`]);
 }
 // Nodes by index; shortest paths come from one array Dijkstra per source node (computed on first use, then kept). Two
 // graphs: the folks' and your farmer's (theirs plus the short cuts).
-const NODE_IDS = Object.keys(G), NN = NODE_IDS.length, NODE_I = Object.fromEntries(NODE_IDS.map((id, i) => [id, i]));
-const NX = Float64Array.from(NODE_IDS, (id) => G[id].x), NZ = Float64Array.from(NODE_IDS, (id) => G[id].z);
-function graph(edges) {
-  const adj = NODE_IDS.map(() => []);
+type XZ = [number, number];
+interface Graph { adj: number[][]; prev: (Int16Array | undefined)[]; routes: (XZ[] | undefined)[][]; live: boolean[]; nearest: Map<number, number> }
+const NODE_IDS = Object.keys(G), NN = NODE_IDS.length;
+const NODE_I: Record<string, number> = Object.fromEntries(NODE_IDS.map((id, i) => [id, i]));
+const nodeOf = (id: string) => { const n = G[id]; if (!n) throw new Error(`season: no node ${id}`); return n; };
+const nodeIndex = (id: string) => { const i = NODE_I[id]; if (i === undefined) throw new Error(`season: no node ${id}`); return i; };
+const NX = Float64Array.from(NODE_IDS, (id) => nodeOf(id).x), NZ = Float64Array.from(NODE_IDS, (id) => nodeOf(id).z);
+const nx = (i: number) => NX[i] ?? 0, nz = (i: number) => NZ[i] ?? 0;
+function graph(edges: readonly (readonly [string, string])[]): Graph {
+  const adj: number[][] = NODE_IDS.map(() => []);
   for (const [a, b] of edges) {
-    const ia = NODE_I[a], ib = NODE_I[b], d = Math.hypot(NX[ia] - NX[ib], NZ[ia] - NZ[ib]);
-    adj[ia].push(ib, d); adj[ib].push(ia, d);
+    const ia = nodeIndex(a), ib = nodeIndex(b), d = Math.hypot(nx(ia) - nx(ib), nz(ia) - nz(ib));
+    adj[ia]?.push(ib, d); adj[ib]?.push(ia, d);
   }
   return { adj, prev: new Array(NN), routes: NODE_IDS.map(() => new Array(NN)), live: adj.map((a) => a.length > 0), nearest: new Map() };
 }
 const FOLK = graph([...EDGES, ...EXTRA]), FARM = graph([...EDGES, ...EXTRA, ...FARMER_EXTRA]);
-function prevFrom(src, g) {
+function prevFrom(src: number, g: Graph) {
   const dist = new Float64Array(NN).fill(Infinity), prev = new Int16Array(NN).fill(-1), done = new Uint8Array(NN);
+  const dd = (i: number) => dist[i] ?? Infinity;
   dist[src] = 0;
   for (;;) {
     let u = -1;
-    for (let i = 0; i < NN; i++) if (!done[i] && dist[i] < Infinity && (u < 0 || dist[i] < dist[u])) u = i;
+    for (let i = 0; i < NN; i++) if (!done[i] && dd(i) < Infinity && (u < 0 || dd(i) < dd(u))) u = i;
     if (u < 0) break;
     done[u] = 1;
-    const adj = g.adj[u];
-    for (let k = 0; k < adj.length; k += 2) { const v = adj[k], nd = dist[u] + adj[k + 1]; if (nd < dist[v]) { dist[v] = nd; prev[v] = u; } }
+    const adj = g.adj[u] ?? [];
+    for (let k = 0; k < adj.length; k += 2) { const v = adj[k] ?? 0, nd = dd(u) + (adj[k + 1] ?? 0); if (nd < dd(v)) { dist[v] = nd; prev[v] = u; } }
   }
   return prev;
 }
 // The route from node ia to node ib (indexes) as [x, z] points (cached; callers copy the outer array, never the points).
-function routePts(ia, ib, g = FOLK) {
-  let out = g.routes[ia][ib];
-  if (out) return out;
+function routePts(ia: number, ib: number, g = FOLK): XZ[] {
+  const cache = g.routes[ia];
+  if (!cache) return [];
+  const hit = cache[ib];
+  if (hit) return hit;
   const prev = (g.prev[ia] ||= prevFrom(ia, g));
-  out = [];
-  if (ia === ib || prev[ib] >= 0) for (let n = ib; n >= 0; n = n === ia ? -1 : prev[n]) out.unshift([NX[n], NZ[n]]);
-  return (g.routes[ia][ib] = out);
+  const out: XZ[] = [];
+  if (ia === ib || (prev[ib] ?? -1) >= 0) for (let n = ib; n >= 0; n = n === ia ? -1 : (prev[n] ?? -1)) out.unshift([nx(n), nz(n)]);
+  return (cache[ib] = out);
 }
 // The node nearest a point (index) on a graph. Walkers stand on a few hundred distinct spots, so answers are remembered.
-function nearestIdx(x, z, g = FOLK) {
+function nearestIdx(x: number, z: number, g = FOLK) {
   const key = Math.round(x * 1000) * 1e6 + Math.round(z * 1000);
   let best = g.nearest.get(key);
   if (best !== undefined) return best;
   let bd = Infinity;
   best = 0;
-  for (let i = 0; i < NN; i++) { if (!g.live[i]) continue; const dx = NX[i] - x, dz = NZ[i] - z, d = dx * dx + dz * dz; if (d < bd) { bd = d; best = i; } }
+  for (let i = 0; i < NN; i++) { if (!g.live[i]) continue; const dx = nx(i) - x, dz = nz(i) - z, d = dx * dx + dz * dz; if (d < bd) { bd = d; best = i; } }
   if (g.nearest.size > 20000) g.nearest.clear();
   g.nearest.set(key, best);
   return best;
 }
 // Point a walker (family or farmer) at (x, z) along the graph; node: arrive exactly on that node.
-function walkTo(w, x, z, node) {
+function walkTo(w: Walker, x: number, z: number, node?: string) {
   const g = w.tasks ? FARM : FOLK;                                     // your farmer (with tasks) knows the short cuts
   // routes are cached: copy the points too, or two walkers share them and a save can't carry the state (saves.test)
-  const pts = routePts(nearestIdx(w.x, w.z, g), node ? NODE_I[node] : nearestIdx(x, z, g), g).map((p) => p.slice());
+  const pts = routePts(nearestIdx(w.x, w.z, g), node ? nodeIndex(node) : nearestIdx(x, z, g), g).map((p): XZ => [p[0], p[1]]);
   // don't step back to a node we have already passed, nor walk past the spot to its node and back
-  if (pts.length >= 2 && (pts[0][0] - w.x) * (pts[1][0] - pts[0][0]) + (pts[0][1] - w.z) * (pts[1][1] - pts[0][1]) < 0) pts.shift();
+  const p0 = pts[0], p1 = pts[1];
+  if (p0 && p1 && (p0[0] - w.x) * (p1[0] - p0[0]) + (p0[1] - w.z) * (p1[1] - p0[1]) < 0) pts.shift();
   if (!node && pts.length >= 2) {
     const a = pts.at(-2), b = pts.at(-1);
-    if ((b[0] - a[0]) * (x - b[0]) + (b[1] - a[1]) * (z - b[1]) < 0) pts.pop();
+    if (a && b && (b[0] - a[0]) * (x - b[0]) + (b[1] - a[1]) * (z - b[1]) < 0) pts.pop();
   }
-  if (!node && (!pts.length || Math.abs(pts.at(-1)[0] - x) + Math.abs(pts.at(-1)[1] - z) > 0.01)) pts.push([r3(x), r3(z)]);
+  const last = pts.at(-1);
+  if (!node && (!last || Math.abs(last[0] - x) + Math.abs(last[1] - z) > 0.01)) pts.push([r3(x), r3(z)]);
   w.path = pts; w.pi = 0;
   w.target = { x: r3(x), z: r3(z) };
 }
 // Move along the path; true when there.
-function step(w, dist) {
+function step(w: Walker, dist: number) {
   if (w.kerb) return false;                                   // waiting at the kerb for a gap in the traffic
   if (w.kerb === false && w.z > ROAD_B0 && w.z < ROAD_B1) dist *= S.crossHurry;   // folks hurry across the road
   const path = w.path;
   let hx = 0, hz = 0, turned = false;
   while (w.pi < path.length && dist > 1e-9) {
-    const p = path[w.pi], px = p[0], pz = p[1], dx = px - w.x, dz = pz - w.z, d = Math.sqrt(dx * dx + dz * dz);
+    const p = path[w.pi];
+    if (!p) break;
+    const px = p[0] ?? 0, pz = p[1] ?? 0, dx = px - w.x, dz = pz - w.z, d = Math.sqrt(dx * dx + dz * dz);
     if (d > 1e-6) { hx = dx; hz = dz; turned = true; }
     if (d <= dist) { w.x = px; w.z = pz; dist -= d; w.pi++; } else { w.x = r3(w.x + dx / d * dist); w.z = r3(w.z + dz / d * dist); dist = 0; }
   }
   if (turned) w.heading = r3(Math.atan2(hx, hz));
   return w.pi >= path.length;
 }
-const near = (a, x, z, r) => (a.x - x) ** 2 + (a.z - z) ** 2 <= r * r;
+const near = (a: { x: number; z: number }, x: number, z: number, r: number) => (a.x - x) ** 2 + (a.z - z) ** 2 <= r * r;
 
+const pickX = (k: number) => PICK_X[k] ?? 0;
 // Where your farmer goes for each station (design §7 station bar: Stand · Patch · Barn · Giant · Lot).
 export const FARMER_SPOTS = {
-  stand: { x: -3.05, z: -7.45 }, barn: { ...PLACES.barn.door }, giant: { x: G.g_tend.x, z: G.g_tend.z },
-  lot: { x: -17.2, z: ROAD.walk }, patch: { x: PICK_X[2], z: aisleZ(0) },
+  stand: { x: -3.05, z: -7.45 }, barn: { ...PLACES.barn.door }, giant: { x: G_TEND.x, z: G_TEND.z },
+  lot: { x: -17.2, z: ROAD.walk }, patch: { x: pickX(2), z: aisleZ(0) },
 };
-const rowSpot = (r) => ({ x: PICK_X[2], z: aisleZ(r) });
+const rowSpot = (r: number) => ({ x: pickX(2), z: aisleZ(r) });
 const PICK_NEAR = [0, 1, 1, 2, 2, 2, 3, 3];                          // pick-spot indexes, weighted between the two gates
-const queueSpot = (i) => (i < QUEUE.length ? QUEUE[i] : { x: QUEUE.at(-1).x - 0.7 * (i - QUEUE.length + 1), z: QUEUE.at(-1).z });
+const QUEUE_END = QUEUE.at(-1) ?? { x: 0, z: 0 };
+const queueSpot = (i: number) => QUEUE[i] ?? { x: QUEUE_END.x - 0.7 * (i - QUEUE.length + 1), z: QUEUE_END.z };
 // Motion (design §7): T.season speeds are what the eye sees at 1x, in world units per real second; each tick moves a
 // walker speed / ticksPerSecond, so the weekend's length in real time never changes how fast anyone looks.
 const TPS = T.calendar.weekend.ticksPerSecond;
-const perTick = (uPerS) => r3(uPerS / TPS);
-const sec = (x) => Math.round(x * TPS);                       // real seconds at 1x -> ticks
+const perTick = (uPerS: number) => r3(uPerS / TPS);
+const sec = (x: number) => Math.round(x * TPS);                       // real seconds at 1x -> ticks
 const SPRINT = perTick(S.farmer.speed), HAUL = perTick(S.farmer.speed * S.farmer.wagon);
 // Cars come out of Marlene along the patch and pull up at its open front (sim/traffic.js): the family steps straight into
 // the patch and the car drives on, up the beach road into the fog (the car park is lost in her; beach-lot cars park on
@@ -200,21 +225,21 @@ const SPRINT = perTick(S.farmer.speed), HAUL = perTick(S.farmer.speed * S.farmer
 // pulls up in front of the stand, a few steps away, about as they pay.
 const ROAD_B0 = traffic.BAND0, ROAD_B1 = traffic.BAND1;          // the lane's width on the ground
 const ROAD_Z0 = ROAD_B0 - 0.1, ROAD_Z1 = ROAD_B1 + 0.1;          // (walkers the cars look out for)
-const WAIT_SPOTS = [[-4.2, -5.95], [-3.6, -5.85], [-3.0, -5.95], [-2.4, -5.85]];   // on the stand's verge, by the pick-up
+const WAIT_SPOTS = [[-4.2, -5.95], [-3.6, -5.85], [-3.0, -5.95], [-2.4, -5.85]] satisfies [number, number][];   // on the stand's verge, by the pick-up
 
 // ------------------------------------------------------------ state
-function freshDay(s) {
+function freshDay(s: State): SeasonDay {
   return { d: s.clock.day, rStart: round3(s.rep.R), n: 0, sched: [], ptr: 0, arrived: 0, served: 0, byYou: 0, turned: 0, walkoffs: 0, queued: 0, halSkipped: 0,
     rev: 0, byV: {}, tips: 0, honey: 0, starsSum: 0, starsN: 0, photo5: 0, low: 0, best: null, firstBad: false, golden: false,
     acts: 0, maxRush: 0, howl: 0, howlAt: -999, fetches: 0, rafts: 0, soldOut: [] };
 }
-function freshTotals(s) {
+function freshTotals(s: State): SeasonTotals {
   return { families: 0, served: 0, turned: 0, walkoffs: 0, weekday: { families: 0, amt: 0 }, revenue: 0, byV: {}, tips: 0, honey: 0,
     starsSum: 0, starsN: 0, rStart: round3(s.rep.R), buzzPeak: s.rep.buzz || 0, goatAte: 0, uturnDays: 0,
     bind: { supply: 0, checkout: 0, wagons: 0, parking: 0, road: 0 }, acts: [], conc: [], fetched: 0, rushTips: 0, rafts: 0, raftDays: 0,
     why: {}, starsHist: [0, 0, 0, 0, 0] };
 }
-function freshSeason(s) {
+function freshSeason(s: State): Season {
   const p = FARMER_SPOTS.stand;
   return {
     families: [], queue: [], seq: 0, cars: [], carSeq: 0, fogSeq: 0,
@@ -228,14 +253,13 @@ function freshSeason(s) {
     day: freshDay(s), totals: freshTotals(s), acts: [], bea: 0, census: { on: 0, gawk: 0, possums: 0, want: 0 },
   };
 }
-export const families = (s) => s.season?.families || [];
-const famById = (s, id) => s.season.families.find((f) => f.id === id);
+export const families = (s: State) => s.season?.families || [];
+const famById = (s: State, id: number | null | undefined) => s.season.families.find((f) => f.id === id);
 
 // ------------------------------------------------------------ visitor generation (design §7)
-const baseY = (s) => S.base * (1 + S.growth * (Math.min(s.clock.year, S.capYear) - 1));
-const radioOn = (s) => s.season.radioW >= 0 && s.season.radioW === weekendIndex(s.clock.day);
+const baseY = (s: State) => S.base * (1 + S.growth * (Math.min(s.clock.year, S.capYear) - 1));
 /** N_day (weekend) or the weekday trickle for day d, before rounding. Weather comes from Marlene's real day. */
-export function expectedFamilies(s, d = s.clock.day) {
+export function expectedFamilies(s: State, d = s.clock.day) {
   const w = s.weather.days[d] || s.weather, rep = S.rep[0] + S.rep[1] * s.rep.R;
   const wx = (S.wx.base - S.wx.fog * w.f) * (w.heat ? S.wx.heat : 1) * (w.rain ? S.wx.rain : 1);
   if (!isWeekend(d)) return S.weekday * baseY(s) * rep * wx;
@@ -246,22 +270,24 @@ export function expectedFamilies(s, d = s.clock.day) {
   return baseY(s) * rep * weekendMult(d) * wx * buzz * mkt * riv * ev;
 }
 // Arrival minute: hourly weights spread over 9:00-16:00; owls only from 15:00.
-let HOURLY_SUM = null;
-function arrivalMinute(sp, u) {
-  if (sp === 'owl') return SP.owl.from + Math.floor(u * (GATE_CLOSE - SP.owl.from));
+let HOURLY_SUM: number | null = null;
+function arrivalMinute(sp: string, u: number) {
+  const owlFrom = SP.owl.from ?? 0;
+  if (sp === 'owl') return owlFrom + Math.floor(u * (GATE_CLOSE - owlFrom));
   const w = S.hourly, slot = (GATE_CLOSE - OPEN) / w.length;
   let x = u * (HOURLY_SUM ??= sum(w));
-  for (let h = 0; h < w.length; h++) { if (x < w[h]) return OPEN + Math.floor((h + x / w[h]) * slot); x -= w[h]; }
+  for (let h = 0; h < w.length; h++) { const wh = w[h] ?? 0; if (x < wh) return OPEN + Math.floor((h + x / wh) * slot); x -= wh; }
   return GATE_CLOSE - 1;
 }
 // The day's families are pre-drawn by index (species, arrival time, everything about them), so N only decides how
 // many come: every bot faces the same crowd (common random numbers) and nobody can reroll a family.
-function planDay(s) {
+function planDay(s: State) {
   const d = s.clock.day, y = s.clock.year, day = s.season.day;
   const n = Math.min(S.candidates, Math.floor(expectedFamilies(s, d) + u01(s.seed, y, d, 'n')));
-  const sched = [];
+  const sched: CrowdEntry[] = [];
   for (let i = 0; i < n; i++) {
     const sp = SPECIES[Math.floor(u01(s.seed, y, d, i, 'sp') * SPECIES.length)];
+    if (!sp) continue;
     sched.push([arrivalMinute(sp, u01(s.seed, y, d, i, 't')), i, sp]);
   }
   // year-1 lessons need a particular family early in the day. The very first one is already at the curb when the gate
@@ -277,79 +303,80 @@ function planDay(s) {
 }
 
 // ------------------------------------------------------------ families: who they are and what they want
-function newFamily(s, d, i, sp, minute, script) {
+function newFamily(s: State, d: number, i: number, sp: string, minute: number, script: string | null | undefined): Family {
   const y = s.clock.year, r = makeRng(hash32(s.seed, y, d, i, 'fam')), TY = SP.types, W = SP.wants;
   let type = 'regular';
   if (script === 'fox') type = 'regular';
   else if (s.weather.heat && next(r) < TY.dayTripper.share) type = 'day';
   else if (next(r) < (sp === 'fox' ? TY.photo.fox : TY.photo.share)) type = 'photo';
   else if (y >= TY.seeker.fromYear && next(r) < TY.seeker.share) type = 'seeker';
-  else if (y >= TY.oldTimer.fromYear && next(r) < (TY.oldTimer[sp] ?? TY.oldTimer.share)) type = 'old';
-  const wants = [];
-  const large = LARGE.filter((v) => VT[v].unlock <= y);
+  else if (y >= TY.oldTimer.fromYear && next(r) < (own(TY.oldTimer, sp) ?? TY.oldTimer.share)) type = 'old';
+  const wants: FamilyWant[] = [];
+  const large = LARGE.filter((v) => unlockYear(v) <= y);
   const nAdult = script === 'first' ? 1 : type === 'day' ? TY.dayTripper.large : next(r) < W.adultLarge ? (type === 'seeker' || next(r) >= W.two ? 1 : 2) : 0;
   for (let k = 0; k < nAdult; k++) wants.push({ v: script === 'fox' ? 'white' : adultVariety(s, r, sp, type, large), kid: false, k: -1, st: 'open', got: null });
-  const kids = [];
-  for (let k = 0; k < (SP[sp].kids ?? 2); k++) {                  // a sea otter has the one pup, on her chest
-    let v = null;
-    if (next(r) < (SP[sp].kidMini ?? W.kidMini)) v = 'mini';
-    if (v && y >= W.weirdFromYear && next(r) < W.weird) v = pick(r, ['warty', 'white'].filter((x) => VT[x].unlock <= y)) || 'mini';
+  const kids: FamilyKid[] = [];
+  const sps = spec(sp);
+  for (let k = 0; k < (sps.kids ?? 2); k++) {                  // a sea otter has the one pup, on her chest
+    let v: string | null = null;
+    if (next(r) < (sps.kidMini ?? W.kidMini)) v = 'mini';
+    if (v && y >= W.weirdFromYear && next(r) < W.weird) v = pick(r, ['warty', 'white'].filter((x) => unlockYear(x) <= y)) || 'mini';
     if (script) v = script === 'possum' ? 'mini' : null;
     kids.push({ v, got: false, hop: 0 });
     if (v) wants.push({ v, kid: true, k, st: 'open', got: null });
   }
-  const dets = [];
+  const dets: string[] = [];
   if (next(r) < S.detour.maze) dets.push('maze');
   if (next(r) < (type === 'photo' ? S.detour.giantPhoto : S.detour.giant * giant.crierEffects(s).gawkMul)) dets.push('giant');
   if (script === 'first') dets.length = 0;                          // straight to the front row and back to the till
   const fort = sp !== 'possum' && next(r) < (sp === 'raccoon' ? S.fort.raccoon : S.fort.others) ? 1 : 0;   // kits up the hay fort while mom queues
   return {
     id: ++s.season.seq, species: sp, type, state: 'in', x: 0, z: 0, heading: Math.PI / 2, path: [], pi: 0, target: null,
-    spd: perTick(S.walk * SP[sp].walk), wants, kids, want: wants[0]?.v || null, bubble: null, cart: [], sat: S.sat.start, why: {},
+    spd: perTick(S.walk * sps.walk), wants, kids, want: wants[0]?.v || null, bubble: null, cart: [], sat: S.sat.start, why: {},
     rows: [], fulls: [], t: 0, wait: 0, pat: 0, park: 'lot', wagon: 0, noWagon: false, dets, rng: r, arr: minute, script: script || null,
     joey: false, carpool: false, raft: 0, dead: false, golden: false, bubbled: false, fort, near: false, kerb: false,
     // set later in the visit; declared here so every family shares one object shape (fast, stable property access)
     car: null, go: null, row: -1, noticed: false, stars: 0, resume: null,
   };
 }
-function adultVariety(s, r, sp, type, large) {
+function adultVariety(s: State, r: Rng, sp: string, type: string, large: string[]): string {
   if (s.clock.year === 1) return 'classic';
-  const pr = SP[sp].prefs, tw = type === 'photo' ? SP.types.photo.weights : {};
-  return weighted(r, large.map((v) => [v, (pr[v] ?? 1) * (tw[v] ?? 1) * patch.fadMul(s, v)]));
+  const pr = spec(sp).prefs, tw: Record<string, number> = type === 'photo' ? SP.types.photo.weights : {};
+  return weighted(r, large.map((v): [string, number] => [v, (pr[v] ?? 1) * (tw[v] ?? 1) * patch.fadMul(s, v)])) ?? 'classic';
 }
-const openWants = (f) => f.wants.filter((w) => w.st === 'open');
-const needsWagon = (f) => !SP[f.species].noWagon && f.wants.filter((w) => !w.kid).length >= 2;   // a pouch; a nose
+const openWants = (f: Family) => f.wants.filter((w) => w.st === 'open');
+const needsWagon = (f: Family) => !spec(f.species).noWagon && f.wants.filter((w) => !w.kid).length >= 2;   // a pouch; a nose
 // satisfaction: one place, so reviews can name the dominant cause
-function mod(f, cause, delta) {
+function mod(f: Family, cause: string, delta: number) {
   if (!delta) return;
   f.sat += delta;
   f.why[cause] = (f.why[cause] || 0) + delta;
 }
 
 // ------------------------------------------------------------ parking and Route 46
-export function parkingCap(s) {
+export function parkingCap(s: State) {
   const pk = S.parking;
   const main = pk.y1 + (has(s, 'gravel') ? pk.gravel : 0) + (hired(s, 'howie') ? pk.howie : 0) + (s.season.gran.direct ? pk.gran : 0);
   return { main, beach: s.season.parking.beachOpen ? pk.beach : 0 };
 }
-function syncParking(s) {
+function syncParking(s: State) {
   const P = s.season.parking, c = parkingCap(s);
   P.used = P.main + P.beach; P.cap = c.main + c.beach;
 }
-function parkSpace(s) {
+function parkSpace(s: State) {
   const P = s.season.parking, c = parkingCap(s);
   if (P.main < c.main) return 'lot';
   if (P.beachOpen && P.beach < c.beach) return 'beach';
   return null;
 }
-export const roadMeter = (s) => clamp((s.season?.road?.q || 0) / S.road.meterCars, 0, 1);
-const halActive = (s) => s.season.halUntil > s.clock.minute;
+export const roadMeter = (s: State) => clamp((s.season?.road?.q || 0) / S.road.meterCars, 0, 1);
+const halActive = (s: State) => s.season.halUntil > s.clock.minute;
 
-function arrive(s, ctx, entry) {
+function arrive(s: State, ctx: Ctx, entry: CrowdEntry) {
   const [m, i, sp, script] = entry, d = s.clock.day, y = s.clock.year;
   if (sp === 'seal') {                                             // by sea: no radio, no shuttle, no parking, no Route 46
     // ...but only one seal family hauls out at a time (T.species.seal.haulOut): with one ashore, the next stays at sea
-    if (s.season.families.filter((f) => f.park === 'sea').length >= SP.seal.haulOut) return;
+    if (s.season.families.filter((f) => f.park === 'sea').length >= (SP.seal.haulOut ?? 1)) return;
     spawn(s, ctx, entry, 'sea'); return;
   }
   if (!script && halActive(s) && u01(s.seed, y, d, i, 'hal') >= S.tellHal.mul) { s.season.day.halSkipped++; return; }
@@ -358,20 +385,20 @@ function arrive(s, ctx, entry) {
   if (lot) { park(s, ctx, lot); spawn(s, ctx, entry, lot); return; }
   const heat = s.weather.heat ? S.road.heat : 1;
   const pat = (S.road.patience[0] + u01(s.seed, y, d, i, 'road') * (S.road.patience[1] - S.road.patience[0])) * heat;
-  s.season.road.cars.push({ e: entry.slice(), pat: r3(pat) });     // a copy: the day's schedule keeps its own
+  s.season.road.cars.push({ e: [...entry], pat: r3(pat) });     // a copy: the day's schedule keeps its own
   s.season.road.q = s.season.road.cars.length;
   s.season.day.queued++; s.season.totals.bind.parking++;
   ctx.emit({ type: 'season/car', kind: 'queue', lot: 'road' });
 }
-function park(s, ctx, lot) {
+function park(s: State, ctx: Ctx, lot: string) {
   const P = s.season.parking;
   if (lot === 'beach') P.beach++; else P.main++;
   syncParking(s);
   ctx.emit({ type: 'season/car', kind: 'park', lot });
 }
-function roadTick(s, ctx) {
+function roadTick(s: State, ctx: Ctx) {
   const R = s.season.road, day = s.season.day;
-  for (let lot; R.cars.length && (lot = parkSpace(s));) { const c = R.cars.shift(); park(s, ctx, lot); spawn(s, ctx, c.e, lot); }
+  for (let lot: string | null; R.cars.length && (lot = parkSpace(s));) { const c = R.cars.shift(); if (!c) break; park(s, ctx, lot); spawn(s, ctx, c.e, lot); }
   if (!R.cars.length && !R.q && !day.howl) return;
   const k = (hired(s, 'howie') ? S.road.howie : 1) * (s.season.gran.direct ? S.road.gran : 1);
   let turned = 0;
@@ -396,12 +423,12 @@ function roadTick(s, ctx) {
 }
 
 // ------------------------------------------------------------ a family's visit (design §7 state machine)
-function spawn(s, ctx, entry, park) {
+function spawn(s: State, ctx: Ctx, entry: CrowdEntry, park: string) {
   const [m, i, sp, script] = entry, d = s.clock.day;
   const f = newFamily(s, d, i, sp, m, script);
   f.park = park;
   if (park === 'sea') {                                            // swimming in, then flumping up the beach to the patch
-    const W = PLACES.sea, z = r3(W.z0 + u01(s.seed, s.clock.year, d, i, 'sea') * (W.z1 - W.z0)), e = NODES.ae3;
+    const W = PLACES.sea, z = r3(W.z0 + u01(s.seed, s.clock.year, d, i, 'sea') * (W.z1 - W.z0)), e = nodeAt('ae3');
     Object.assign(f, { state: 'in', x: W.x, z, heading: -Math.PI / 2, t: 0, pi: 0, target: { x: e.x, z: e.z },
       path: [[W.edge, r3((z + W.up.z) / 2)], [W.up.x, W.up.z], [e.x, e.z]] });
     s.season.families.push(f);
@@ -423,7 +450,7 @@ function spawn(s, ctx, entry, park) {
  * Add one family to today's crowd right now (scripted moments, tests). opts: { species, park: 'lot'|'beach'|'shuttle'|'sea',
  * script: 'fox'|'possum'|null, i (the crowd index their dice come from) }. Returns the family (in its car, arriving).
  */
-export function addFamily(s, ctx, { species = 'fox', park: lot = 'lot', script = null, i = 900 + (s.season.seq % 50) } = {}) {
+export function addFamily(s: State, ctx: Ctx, { species = 'fox', park: lot = 'lot', script = null, i = 900 + (s.season.seq % 50) } = {}) {
   if (species === 'seal') lot = 'sea';                             // seals always come by sea
   if (lot === 'lot' || lot === 'beach') park(s, ctx, lot);
   spawn(s, ctx, [s.clock.minute, i, species, script], lot);
@@ -431,12 +458,12 @@ export function addFamily(s, ctx, { species = 'fox', park: lot = 'lot', script =
 }
 
 // At the gate: first impressions, the field's variety, the weather, the parking, a wagon if they need one.
-function enterPatch(s, ctx, f) {
+function enterPatch(s: State, ctx: Ctx, f: Family) {
   if (s.season.day.firstBad) mod(f, 'first', T.patch.fullness.firstSat);
   mod(f, 'variety', patch.varietyBonus(s));
   if (s.weather.f > T.weather.effects.cosyF) mod(f, 'cosy', S.sat.cosy);
   if (f.park === 'beach') mod(f, 'beach', f.species === 'pelican' ? S.sat.beachPelican : S.sat.beach);
-  if (f.park === 'sea') mod(f, 'sea', SP.seal.seaSat);
+  if (f.park === 'sea') mod(f, 'sea', SP.seal.seaSat ?? 0);
   if (s.season.golden) goldenFor(f);
   if (f.species === 'otter') raftUp(s, ctx, f);
   if (needsWagon(f)) {
@@ -447,11 +474,11 @@ function enterPatch(s, ctx, f) {
 }
 // Sea otters raft: an otter family coming into the patch while another is still browsing takes her paw, so neither
 // drifts off. Both get +raftSat; the first raft of a day gets a toast and a float over the pair.
-function raftUp(s, ctx, f) {
+function raftUp(s: State, ctx: Ctx, f: Family) {
   const o = s.season.families.find((x) => x !== f && x.species === 'otter' && !x.raft && browsing(x));
   if (!o) return;
   f.raft = o.id; o.raft = f.id;
-  mod(f, 'raft', SP.otter.raftSat); mod(o, 'raft', SP.otter.raftSat);
+  mod(f, 'raft', SP.otter.raftSat ?? 0); mod(o, 'raft', SP.otter.raftSat ?? 0);
   ctx.emit({ type: 'season/raft', a: f.id, b: o.id, x: o.x, z: o.z });
   const day = s.season.day;
   day.rafts = (day.rafts || 0) + 1;
@@ -462,21 +489,21 @@ function raftUp(s, ctx, f) {
   }
   s.season.totals.rafts = (s.season.totals.rafts || 0) + 1;
 }
-const pickTicks = (s, f) => {
+const pickTicks = (s: State, f: Family) => {
   const [a, b] = S.pickTicks;
   if (f.script === 'first') return a;
   const cosy = s.weather.f > T.weather.effects.cosyF || s.weather.f > CAT.pea_soup.f ? CAT.pea_soup.linger : 1;
   return Math.round((a + next(f.rng) * (b - a)) * (f.species === 'possum' ? S.possumPick : 1) * cosy);
 };
-const rowOpen = (s, r) => s.patch.rows[r]?.open && !(s.season.closed[r] > s.clock.minute);
-const inPuff = (s, x, z) => s.season.puffs.some((p) => near({ x, z }, p.x, p.z, CAT.skunk_startle.radius));
+const rowOpen = (s: State, r: number) => s.patch.rows[r]?.open && !((s.season.closed[r] ?? 0) > s.clock.minute);
+const inPuff = (s: State, x: number, z: number) => s.season.puffs.some((p) => near({ x, z }, p.x, p.z, CAT.skunk_startle.radius));
 // Pick the next row: weight = prime stock of what they want x fullness x front bonus; kids pull toward minis.
-function chooseRow(s, f) {
+function chooseRow(s: State, f: Family) {
   const wants = openWants(f), kidsMini = wants.some((w) => w.kid && w.v === 'mini');
-  let best = null, total = 0;
-  const opts = [];
-  s.patch.rows.forEach((row, r) => {
-    if (!rowOpen(s, r) || f.rows.includes(r) || inPuff(s, PICK_X[2], aisleZ(r))) return;
+  let best: number | null = null, total = 0;
+  const opts: [number, number][] = [];
+  s.patch.rows.forEach((_row, r) => {
+    if (!rowOpen(s, r) || f.rows.includes(r) || inPuff(s, pickX(2), aisleZ(r))) return;
     let stock = 0;
     for (const w of wants) stock += patch.primeStock(s, r, w.v);
     if (!stock) return;
@@ -489,13 +516,13 @@ function chooseRow(s, f) {
   for (const [r, w] of opts) { x -= w; best = r; if (x < 0) break; }
   return best;
 }
-function nextRow(s, ctx, f) {
+function nextRow(s: State, ctx: Ctx, f: Family) {
   if (f.rows.length < (f.type === 'seeker' ? SP.types.seeker.rows : S.maxRows) && openWants(f).length) {
-    const r = f.script === 'first' ? s.patch.rows.findIndex((row, i) => rowOpen(s, i) && openWants(f).some((w) => patch.primeStock(s, i, w.v))) : chooseRow(s, f);
+    const r = f.script === 'first' ? s.patch.rows.findIndex((_row, i) => rowOpen(s, i) && openWants(f).some((w) => patch.primeStock(s, i, w.v))) : chooseRow(s, f);
     if (r != null && r >= 0) {
-      const k = f.script === 'first' ? 1 : PICK_NEAR[Math.floor(next(f.rng) * PICK_NEAR.length)];   // mostly near the path through the middle
+      const k = f.script === 'first' ? 1 : PICK_NEAR[Math.floor(next(f.rng) * PICK_NEAR.length)] ?? 0;   // mostly near the path through the middle
       f.row = r; f.state = 'walk'; f.go = 'row';
-      walkTo(f, PICK_X[k], aisleZ(r), `p${r}_${k}`);
+      walkTo(f, pickX(k), aisleZ(r), `p${r}_${k}`);
       return;
     }
   }
@@ -503,7 +530,7 @@ function nextRow(s, ctx, f) {
   afterBrowse(s, ctx, f);
 }
 // What they want isn't anywhere in the field: the [?] bubble (once per family), right where they stand.
-function wantBubble(s, ctx, f) {
+function wantBubble(s: State, ctx: Ctx, f: Family) {
   const missing = openWants(f).find((w) => !patch.rowsWithPrime(s, w.v).length);
   if (!missing || f.bubbled) return false;
   // only a [?] you could do something about: with nothing in the barn and nothing else to offer (a picked-clean field),
@@ -515,11 +542,11 @@ function wantBubble(s, ctx, f) {
 }
 // Picking at a row: buy each open want this row has in prime (Premium makes some think twice; Perfect Seekers only buy
 // from a row at least 60% full; a second large pumpkin needs a wagon).
-function pickAt(s, ctx, f) {
+function pickAt(s: State, ctx: Ctx, f: Family) {
   const r = f.row, full = patch.fullness(s, r);
   f.rows.push(r); f.fulls.push(r3(full));
   const tier = s.season.tier, y = s.clock.year;
-  let large = f.cart.filter((c) => VT[c.v].large && !c.kid).length;
+  let large = f.cart.filter((c) => unlockLarge(c.v) && !c.kid).length;
   for (const w of openWants(f)) {
     if (!patch.primeStock(s, r, w.v)) continue;
     if (f.type === 'seeker' && full < SP.types.seeker.minFull) continue;
@@ -544,24 +571,25 @@ function pickAt(s, ctx, f) {
     }
   }
 }
-function buy(s, ctx, f, r, w, v, how = 'got') {
-  const out = {};
+function buy(s: State, _ctx: Ctx, f: Family, r: number, w: FamilyWant, v: string, how = 'got') {
+  const out = { trucked: 0 };
   if (!patch.take(s, r, v, 1, { out })) return false;
   f.cart.push({ v, soft: false, tr: !!out.trucked, kid: w.kid });
   w.st = how; w.got = v;
-  if (w.kid) f.kids[w.k].got = true;
+  const kid = f.kids[w.k];
+  if (w.kid && kid) kid.got = true;
   if (how === 'got') mod(f, w.kid ? 'kids' : 'adult', w.kid ? S.sat.kid : S.sat.adult);
   else if (how === 'sug') mod(f, 'suggested', S.sat.suggested);
   else if (how === 'sub') mod(f, 'suggested', S.sat.alone);
   if (out.trucked) noticeTrucked(s, f);
   return true;
 }
-function noticeTrucked(s, f) {
+function noticeTrucked(_s: State, f: Family) {
   if (f.noticed) return;
-  const Tk = T.patch.trucked, p = f.type === 'old' ? SP.types.oldTimer.trucked : Tk[f.species] ?? Tk.notice;
+  const Tk = T.patch.trucked, p = f.type === 'old' ? SP.types.oldTimer.trucked : own({ beaver: Tk.beaver, owl: Tk.owl, pelican: Tk.pelican } satisfies Record<string, number>, f.species) ?? Tk.notice;
   if (next(f.rng) < p) { f.noticed = true; mod(f, 'trucked', S.sat.trucked); }
 }
-function afterPick(s, ctx, f) {
+function afterPick(s: State, ctx: Ctx, f: Family) {
   const left = openWants(f);
   if (!left.length) return afterBrowse(s, ctx, f);
   // something they want exists somewhere else in the field: keep browsing
@@ -572,26 +600,27 @@ function afterPick(s, ctx, f) {
 }
 // A want you can answer: "Fetch from barn" (the barn has it) or "Try ___" (another prime variety in the field, a large one
 // for the grown-ups), the same choices the [?] chooser offers.
-const answerable = (s, w) => !!w && (patch.barnStock(s, w.v) > 0
-  || Object.keys(VT).some((v) => v !== w.v && (w.kid || VT[v].large) && patch.rowsWithPrime(s, v).length));
-function showBubble(s, ctx, f, v, kind) {
+const answerable = (s: State, w: FamilyWant | undefined) => !!w && (patch.barnStock(s, w.v) > 0
+  || Object.keys(VT).some((v) => v !== w.v && (w.kid || own(VT, v)?.large) && patch.rowsWithPrime(s, v).length));
+function showBubble(s: State, ctx: Ctx, f: Family, v: any, kind: string) {
   f.bubble = { v, kind, t: kind === 'wagon' ? S.noWagonTicks : S.bubbleTicks, held: 0, t0: s.clock.minute, looked: false };
   ctx.emit({ type: 'season/bubble', id: f.id, v, kind });
 }
 // Unanswered wants: substitute another large prime (50%), else soft fruit of the want at half price (50%), else go without.
-function settleWants(s, ctx, f) {
+function settleWants(s: State, ctx: Ctx, f: Family) {
   for (const w of openWants(f)) {
     if (!w.kid || w.v !== 'mini') {
       if (next(f.rng) < S.substitute) {
-        const subs = LARGE.filter((v) => v !== w.v).map((v) => [v, patch.rowsWithPrime(s, v)]).filter(([, rs]) => rs.length);
-        if (subs.length) { const [v, rs] = subs[Math.floor(next(f.rng) * subs.length)]; if (buy(s, ctx, f, rs[0], w, v, 'sub')) continue; }   // a substitute is still a sale: not a lost one
+        const subs = LARGE.filter((v) => v !== w.v).flatMap((v) => { const rs = patch.rowsWithPrime(s, v); return rs.length ? [{ v, rs }] : []; });
+        if (subs.length) { const sub = subs[Math.floor(next(f.rng) * subs.length)], r0 = sub?.rs[0]; if (sub && r0 !== undefined && buy(s, ctx, f, r0, w, sub.v, 'sub')) continue; }   // a substitute is still a sale: not a lost one
       }
     }
     if (next(f.rng) < S.softInstead) {
-      const r = s.patch.rows.findIndex((row) => row.by[w.v]?.soft > 0);
+      const r = s.patch.rows.findIndex((row) => (row.by[w.v]?.soft ?? 0) > 0);
       if (r >= 0 && patch.take(s, r, w.v, 1, { soft: true })) {
         f.cart.push({ v: w.v, soft: true, tr: false, kid: w.kid }); w.st = 'soft'; w.got = w.v;
-        if (w.kid) f.kids[w.k].got = true;
+        const kid = f.kids[w.k];
+        if (w.kid && kid) kid.got = true;
         mod(f, 'soft', S.sat.soft); s.season.totals.bind.supply += 0.5; continue;   // half a sale lost
       }
     }
@@ -601,7 +630,7 @@ function settleWants(s, ctx, f) {
     s.season.totals.bind.supply++;
   }
 }
-function afterBrowse(s, ctx, f) {
+function afterBrowse(s: State, ctx: Ctx, f: Family) {
   settleWants(s, ctx, f);
   if (f.park === 'beach') fetchCar(s, f);          // it's a long way round from the sand: off it goes, to wait in the fog
   if (f.bubble?.kind === 'want') f.bubble = null;
@@ -612,26 +641,27 @@ function afterBrowse(s, ctx, f) {
     else if (m < bad) mod(f, 'thin', T.patch.fullness.badSat);
   }
   // done in the back rows, right beside her: half of them wander over to see the giant (once, and not at closing)
-  if (!f.near && f.rows.length && f.rows.at(-1) >= S.detour.nearRow && !f.dets.includes('giant') && s.clock.minute < S.closing) {
+  if (!f.near && f.rows.length && (f.rows.at(-1) ?? -1) >= S.detour.nearRow && !f.dets.includes('giant') && s.clock.minute < S.closing) {
     f.near = true;
     if (next(f.rng) < S.detour.giantNear) f.dets.unshift('giant');
   }
   nextDetour(s, ctx, f);
 }
-const DETOUR = {
+const DETOUR: Record<string, { node: string; state: string; ticks: () => number }> = {
   giant: { node: 'g_view', state: 'gawk', ticks: () => S.giantTicks },
   maze: { node: 'maze', state: 'maze', ticks: () => S.detour.mazeTicks },
   fort: { node: 'hayfort', state: 'fort', ticks: () => S.fort.ticks },
 };
-function nextDetour(s, ctx, f) {
-  const dz = f.dets.shift();
-  if (!dz) return toStand(s, ctx, f);
-  const n = NODES[DETOUR[dz].node];
+function nextDetour(s: State, ctx: Ctx, f: Family) {
+  const dz = f.dets.shift(), D = dz ? own(DETOUR, dz) : undefined, n = D ? own(NODES, D.node) : undefined;
+  if (!dz || !D || !n) return toStand(s, ctx, f);
   f.state = 'walk'; f.go = dz;
-  walkTo(f, n.x, n.z, DETOUR[dz].node);
+  walkTo(f, n.x, n.z, D.node);
 }
-function atDetour(s, ctx, f, dz) {
-  f.state = DETOUR[dz].state; f.t = DETOUR[dz].ticks();
+function atDetour(s: State, _ctx: Ctx, f: Family, dz: string) {
+  const D = own(DETOUR, dz);
+  if (!D) return;
+  f.state = D.state; f.t = D.ticks();
   if (dz === 'giant') {
     const est = s.giant && giant.hasFruit(s.giant) ? giant.publishedEstimate(s, s.giant) : 0, C = giant.crierEffects(s);
     if (est >= C.gawkEst) mod(f, 'gawk', C.gawkSat);
@@ -639,7 +669,7 @@ function atDetour(s, ctx, f, dz) {
   } else mod(f, dz, dz === 'maze' ? S.detour.mazeKids : S.detour.fortKids);   // the kids' favourite part
 }
 // Walk to the back of the line; patience only starts counting once they're standing in it.
-function toStand(s, ctx, f) {
+function toStand(s: State, ctx: Ctx, f: Family) {
   f.bubble = null;
   if (!f.cart.length) return leave(s, ctx, f);
   f.state = 'toQueue'; f.go = null;
@@ -647,13 +677,13 @@ function toStand(s, ctx, f) {
   const p = queueSpot(s.season.queue.length);
   walkTo(f, p.x, p.z);
 }
-function joinQueue(s, ctx, f) {
+function joinQueue(s: State, _ctx: Ctx, f: Family) {
   f.state = 'queue'; f.wait = 0;
   if (f.fort === 1) { f.fort = 2; mod(f, 'fort', S.detour.fortKids); }   // the kits are off up the hay fort (render: f.fort 2)
-  f.pat = Math.round(S.queue.patience * SP[f.species].patience * (f.type === 'day' ? SP.types.dayTripper.patience : 1));
+  f.pat = Math.round(S.queue.patience * spec(f.species).patience * (f.type === 'day' ? SP.types.dayTripper.patience : 1));
   s.season.queue.push(f.id);
 }
-function leave(s, ctx, f) {
+function leave(s: State, _ctx: Ctx, f: Family) {
   f.state = 'out'; f.bubble = null; f.go = 'exit';
   if (f.fort === 2) f.fort = 3;                                    // down from the fort, back with mom
   const qi = s.season.queue.indexOf(f.id);
@@ -662,8 +692,8 @@ function leave(s, ctx, f) {
   if (f.wagon) {
     f.wagon = 0;
     const W = s.season.wagons;
-    if (f.rows.length && (s.unlocks.wagons || s.clock.year > 1) && next(f.rng) < S.strays) {
-      const r = f.rows.at(-1);
+    const r = f.rows.at(-1);
+    if (r !== undefined && (s.unlocks.wagons || s.clock.year > 1) && next(f.rng) < S.strays) {
       W.strays.push({ id: `w${s.season.seq}-${f.id}`, x: r3(-8.5 + next(f.rng) * 15), z: r3(aisleZ(r) + 0.35), lesson: false });
     } else W.free++;
   }
@@ -676,12 +706,12 @@ function leave(s, ctx, f) {
   // out to the stand's verge by the pick-up (over the road at a crossing if they're still on the patch's side); their car
   // is on its way
   const w = WAIT_SPOTS[f.id % WAIT_SPOTS.length];
-  walkTo(f, w[0], w[1]);
+  if (w) walkTo(f, w[0], w[1]);
   fetchCar(s, f); f.go = 'wait';
 }
 // Their car has picked them up: their space in the lot (or on the sand) is free as it pulls away. (A beach-lot car
 // leaves its space on the sand earlier, to come round for them; the space counts as theirs until they're in.)
-function freeSpace(s, ctx, f) {
+function freeSpace(s: State, ctx: Ctx, f: Family) {
   const P = s.season.parking;
   if (f.park === 'lot') P.main = Math.max(0, P.main - 1);
   else if (f.park === 'beach') P.beach = Math.max(0, P.beach - 1);
@@ -691,7 +721,7 @@ function freeSpace(s, ctx, f) {
 // Their car gets ready to fetch them, once: when they head for the line at the till (a beach-lot car backs off the sand
 // and goes round through Marlene as soon as they're done browsing), or as they leave without paying. It waits in the
 // fog until they're nearly ready (carReady), and holds its space at the pick-up until they're in.
-function fetchCar(s, f) {
+function fetchCar(s: State, f: Family) {
   const se = s.season, c = carOf(s, f);
   if (c && (c.k === 'fetch' || c.k === 'round' || c.k === 'home')) return;   // already on its way
   if (f.park === 'beach' && c?.k === 'parked') Object.assign(c, { k: 'round', r: 'sand', s: 0, v: 0, t: 0 });
@@ -700,19 +730,19 @@ function fetchCar(s, f) {
 }
 // families on their way home: in their car, walking to the curb, waiting there
 const LEAVING = new Set(['car', 'out', 'curb']);
-const atSea = (f) => f.x > PLACES.sea.edge;                        // a seal in the water swims (quicker than a flump)
-const carOf = (s, f) => s.season.cars.find((c) => c.id === f.car) || null;
-const beachSpot = (se) => {
-  const used = se.cars.filter(traffic.holdsSpace).map((c) => c.bz), B = ROAD.sand;
-  return { x: B.x, z: B.spots.find((z) => !used.includes(z)) ?? B.spots[0] };
+const atSea = (f: Family) => f.x > PLACES.sea.edge;                        // a seal in the water swims (quicker than a flump)
+const carOf = (s: State, f: Family) => s.season.cars.find((c) => c.id === f.car) || null;
+const beachSpot = (se: Season) => {
+  const used = se.cars.filter(traffic.holdsSpace).map((c: Car) => c.bz), B = ROAD.sand;
+  return { x: B.x, z: B.spots.find((z) => !used.includes(z)) ?? B.spots[0] ?? 0 };
 };
-function gone(s, ctx, f) {
+function gone(s: State, _ctx: Ctx, f: Family) {
   const i = s.season.families.indexOf(f);
   if (i >= 0) s.season.families.splice(i, 1);
 }
 // The road, one tick (sim/traffic.js): cars come in, pull up at the drop-off and drive on up the beach. There a family
 // hops out into the patch, or hops in from the verge once they're at the door; riding families go where their car goes.
-function carsTick(s, ctx) {
+function carsTick(s: State, ctx: Ctx) {
   const se = s.season;
   if (!se.cars.length) return;
   // anyone on foot on the road or about to step off its verge (the cars look out for them)
@@ -721,7 +751,7 @@ function carsTick(s, ctx) {
   for (const f of se.families) if (f.state !== 'car' && f.z > ROAD_Z0 && f.z < ROAD_Z1) walkers.push({ id: f.id, x: f.x, z: f.z });
   if (se.runaway) walkers.push({ id: -1, x: se.runaway.x, z: se.runaway.z });
   // a car's family (a dozen or so on the farm: a scan beats building a Map every tick)
-  const fam = { get: (id) => { for (const f of se.families) if (f.id === id) return f; return undefined; } };
+  const fam = { get: (id: number) => { for (const f of se.families) if (f.id === id) return f; return undefined; } };
   const done = traffic.tick(se, walkers, (c) => atStop(s, ctx, c, fam.get(c.fam)), () => {},
     (c, door) => (door ? atDoor(fam.get(c.fam), c) : carReady(s, fam.get(c.fam))));
   for (const c of done) {
@@ -750,7 +780,7 @@ function carsTick(s, ctx) {
 // A pick-up car waiting in the fog comes in once its family is about as far from the pick-up as it is (S.car.call ticks):
 // the rest of their walk to the line and a turn at the till for each family ahead of them (quick with you behind the
 // counter, Gran's pace without), or the rest of their walk out. A car there too soon would hold up everyone behind it.
-function carReady(s, f) {
+function carReady(s: State, f: Family | undefined) {
   if (!f || f.state === 'curb') return true;
   if (f.state === 'out') return pathLeft(f) / f.spd <= S.car.call;
   if (f.state !== 'queue' && f.state !== 'toQueue') return false;
@@ -759,17 +789,17 @@ function carReady(s, f) {
   return (f.state === 'toQueue' ? pathLeft(f) / f.spd : 0) + ahead * turn <= S.car.call;
 }
 // ...and its family is right by its door, about to hop in (it stops for them)
-function atDoor(f, c) {
+function atDoor(f: Family | undefined, c: Car) {
   if (!f || f.go !== 'door' || (f.state !== 'out' && f.state !== 'curb')) return false;
   const d = traffic.doorOf(c);
   return near(f, d.x, d.z, 1.2);
 }
-function pathLeft(w) {
+function pathLeft(w: Walker) {
   let d = 0, x = w.x, z = w.z;
-  for (let i = w.pi; i < w.path.length && d <= 99; i++) { const p = w.path[i]; d += Math.hypot(p[0] - x, p[1] - z); x = p[0]; z = p[1]; }
+  for (let i = w.pi; i < w.path.length && d <= 99; i++) { const [px = x, pz = z] = w.path[i] ?? []; d += Math.hypot(px - x, pz - z); x = px; z = pz; }
   return d;
 }
-function atStop(s, ctx, c, f) {
+function atStop(_s: State, _ctx: Ctx, c: Car, f: Family | undefined) {
   const d = traffic.door(c.r, c.slot), x = r3(d.x), z = r3(d.z);
   if (c.k === 'drop') {
     // out of the door on the patch side and straight into the front row's aisle
@@ -780,16 +810,16 @@ function atStop(s, ctx, c, f) {
 }
 
 // One family, one tick: a small handler per state (rare states never disturb the common ones' compiled code).
-const STATE_TICK = {
+const STATE_TICK: Record<string, (s: State, ctx: Ctx, f: Family) => void> = {
   car() {},                                               // riding: carsTick moves them with their car
-  in(s, ctx, f) { if (step(f, f.spd * (atSea(f) ? SP.seal.swim : 1.15))) enterPatch(s, ctx, f); },   // a skip in their step
-  walk(s, ctx, f) {
+  in(s: State, ctx: Ctx, f: Family) { if (step(f, f.spd * (atSea(f) ? SP.seal.swim ?? 1 : 1.15))) enterPatch(s, ctx, f); },   // a skip in their step
+  walk(s: State, ctx: Ctx, f: Family) {
     if (!step(f, f.spd)) return;
     if (f.go === 'row') { f.state = 'pick'; f.t = pickTicks(s, f); }
-    else if (DETOUR[f.go]) atDetour(s, ctx, f, f.go);
+    else if (f.go && own(DETOUR, f.go)) atDetour(s, ctx, f, f.go);
   },
-  pick(s, ctx, f) { if (--f.t <= 0) { pickAt(s, ctx, f); if (f.state === 'pick') afterPick(s, ctx, f); } },
-  want(s, ctx, f) {
+  pick(s: State, ctx: Ctx, f: Family) { if (--f.t <= 0) { pickAt(s, ctx, f); if (f.state === 'pick') afterPick(s, ctx, f); } },
+  want(s: State, ctx: Ctx, f: Family) {
     const b = f.bubble;
     if (!b) { afterBrowse(s, ctx, f); return; }
     if (answering(s, f)) {                                  // your farmer is on the way: they wait, but not forever
@@ -798,44 +828,45 @@ const STATE_TICK = {
     }
     if (--b.t <= 0) afterBrowse(s, ctx, f);
   },
-  gawk(s, ctx, f) { if (--f.t <= 0) nextDetour(s, ctx, f); },
-  maze(s, ctx, f) { if (--f.t <= 0) nextDetour(s, ctx, f); },
-  fort(s, ctx, f) { if (--f.t <= 0) nextDetour(s, ctx, f); },
+  gawk(s: State, ctx: Ctx, f: Family) { if (--f.t <= 0) nextDetour(s, ctx, f); },
+  maze(s: State, ctx: Ctx, f: Family) { if (--f.t <= 0) nextDetour(s, ctx, f); },
+  fort(s: State, ctx: Ctx, f: Family) { if (--f.t <= 0) nextDetour(s, ctx, f); },
   toddler() {},                                           // posing: the toddler event moves them on
-  whale(s, ctx, f) { step(f, f.spd); },
-  toQueue(s, ctx, f) {
+  whale(_s: State, _ctx: Ctx, f: Family) { step(f, f.spd); },
+  toQueue(s: State, ctx: Ctx, f: Family) {
     const p = queueSpot(s.season.queue.length);           // the back of the line moves up as folks are served
     const x = r3(p.x), z = r3(p.z), n = f.path.length;
-    if (f.pi < n && (f.path[n - 1][0] !== x || f.path[n - 1][1] !== z)) f.path[n - 1] = [x, z];
+    const last = f.path[n - 1];
+    if (f.pi < n && last && (last[0] !== x || last[1] !== z)) f.path[n - 1] = [x, z];
     if (step(f, f.spd) || near(f, p.x, p.z, 0.3)) joinQueue(s, ctx, f);
   },
-  queue(s, ctx, f) { queueTick(s, ctx, f); },
-  out(s, ctx, f) {                                          // out to the verge, and along it to their car's door
-    if (f.go === 'sea') { if (step(f, f.spd * (atSea(f) ? SP.seal.swim : 1))) { ctx.emit({ type: 'season/splash', id: f.id, x: f.x, z: f.z }); gone(s, ctx, f); } return; }
+  queue(s: State, ctx: Ctx, f: Family) { queueTick(s, ctx, f); },
+  out(s: State, ctx: Ctx, f: Family) {                                          // out to the verge, and along it to their car's door
+    if (f.go === 'sea') { if (step(f, f.spd * (atSea(f) ? SP.seal.swim ?? 1 : 1))) { ctx.emit({ type: 'season/splash', id: f.id, x: f.x, z: f.z }); gone(s, ctx, f); } return; }
     toDoor(s, f);
     if (step(f, f.spd)) f.state = 'curb';
   },
-  curb(s, ctx, f) { if (toDoor(s, f)) f.state = 'out'; },                     // waiting there for it
+  curb(s: State, _ctx: Ctx, f: Family) { if (toDoor(s, f)) f.state = 'out'; },                     // waiting there for it
 };
 // Their car is at the pick-up, or waiting its turn on the stand's side a few steps from it: along the verge to its door
 // (once they're on the stand's side of the road), following it as it moves up. True when they set off (again).
-function toDoor(s, f) {
+function toDoor(s: State, f: Family) {
   const c = carOf(s, f);
   if (!c || c.k !== 'fetch' || c.r !== 'stand' || c.q >= 0 || f.z > ROAD_B0 - 0.05 || !traffic.nearPickup(c)) return false;
   const d = traffic.doorOf(c), x = r3(d.x), z = r3(d.z);
-  if (f.go === 'door' && Math.abs(f.target.x - x) < 0.05) return false;
+  if (f.go === 'door' && f.target && Math.abs(f.target.x - x) < 0.05) return false;
   f.go = 'door'; f.path = [[x, z]]; f.pi = 0; f.target = { x, z };
   return true;
 }
-function famTick(s, ctx, f) {
-  const fn = STATE_TICK[f.state];
+function famTick(s: State, ctx: Ctx, f: Family) {
+  const fn = own(STATE_TICK, f.state);
   if (fn) fn(s, ctx, f);
   if (f.bubble !== null && f.bubble.kind === 'wagon' && --f.bubble.t <= 0) f.bubble = null;
   if (s.clock.minute >= S.closing && CLOSING.has(f.state) && !(f.state === 'want' && answering(s, f))) { f.dets = []; afterBrowse(s, ctx, f); }
 }
 const CLOSING = new Set(['walk', 'pick', 'gawk', 'maze', 'fort', 'want']);
-const answering = (s, f) => s.season.farmer.tasks.some((t) => t.fam === f.id && (t.k === 'fetch' || t.k === 'try'));
-function queueTick(s, ctx, f) {
+const answering = (s: State, f: Family) => s.season.farmer.tasks.some((t) => t.fam === f.id && (t.k === 'fetch' || t.k === 'try'));
+function queueTick(s: State, ctx: Ctx, f: Family) {
   const i = s.season.queue.indexOf(f.id), p = queueSpot(Math.max(0, i));
   // the line moved up: still on the way in, keep the route and just change where it ends
   if (!f.target || f.target.x !== r3(p.x) || f.target.z !== r3(p.z)) {
@@ -858,7 +889,7 @@ function queueTick(s, ctx, f) {
   }
 }
 // Queue patience ran out: they drop their pumpkins (Gran puts them back in the barn) and give 1 star.
-function walkOff(s, ctx, f) {
+function walkOff(s: State, ctx: Ctx, f: Family) {
   for (const c of f.cart) s.patch.barnLots.push({ v: c.v, n: 1, age: 0, st: c.soft ? 'soft' : 'prime', sa: 0, tr: c.tr });
   patch.refreshRows(s);
   f.cart = [];
@@ -866,28 +897,30 @@ function walkOff(s, ctx, f) {
   s.season.day.walkoffs++; s.season.totals.walkoffs++; s.season.totals.bind.checkout++;
   finish(s, ctx, f, 1);
   ctx.emit({ type: 'season/walkoff', id: f.id, x: f.x, z: f.z });
-  ctx.emit({ type: 'toast', text: fill(L.walkoff, { many: NAMES[f.species]?.many ?? f.species }), cls: 'bad', icon: 'stand' });
+  ctx.emit({ type: 'toast', text: fill(L.walkoff, { many: own(NAMES, f.species)?.many ?? f.species }), cls: 'bad', icon: 'stand' });
   leave(s, ctx, f);
 }
 
 // ------------------------------------------------------------ checkout (Gran, Dez, you)
 const TIERS = ['bargain', 'fair', 'premium'];
-export const tierMul = (s) => (s.clock.year >= S.tiers.fromYear ? S.tiers[s.season.tier] ?? 1 : 1);
-const frontFamily = (s) => (s.season.queue.length ? famById(s, s.season.queue[0]) : null);
+export const tierMul = (s: State) => (s.clock.year >= S.tiers.fromYear ? own({ bargain: S.tiers.bargain, fair: S.tiers.fair, premium: S.tiers.premium } satisfies Record<string, number>, s.season.tier) ?? 1 : 1);
+const frontFamily = (s: State) => (s.season.queue.length ? famById(s, s.season.queue[0]) : null);
 /** The front family is at the counter and can be rung up. */
-export function queueReady(s) {
+export function queueReady(s: State) {
   const f = frontFamily(s);
-  return !!f && f.state === 'queue' && near(f, QUEUE[0].x, QUEUE[0].z, S.queueReady);
+  const head = QUEUE[0];
+  return !!f && !!head && f.state === 'queue' && near(f, head.x, head.z, S.queueReady);
 }
 /** Your farmer is behind the counter with nothing else to do. */
-export const atStand = (s) => s.season?.farmer.at === 'stand' && !s.season.farmer.tasks.length;
+export const atStand = (s: State) => s.season?.farmer.at === 'stand' && !s.season.farmer.tasks.length;
 
-function serve(s, ctx, f, by) {
+function serve(s: State, ctx: Ctx, f: Family | null | undefined, by: string) {
+  if (!f) return;
   const day = s.season.day, tot = s.season.totals, you = s.season.you, m = s.clock.minute, y = s.clock.year;
   const tm = f.type === 'panic' ? 1 : tierMul(s);
   let amount = 0;
   for (const c of f.cart) {
-    const p = round2((c.tr ? VT.classic.price : VT[c.v].price) * (c.soft && f.type !== 'panic' ? T.patch.aging.softPrice : 1) * tm);
+    const p = round2((c.tr ? VT.classic.price : (own(VT, c.v) ?? VT.classic).price) * (c.soft && f.type !== 'panic' ? T.patch.aging.softPrice : 1) * tm);
     amount = round2(amount + p);
     day.byV[c.v] = round2((day.byV[c.v] || 0) + p); tot.byV[c.v] = round2((tot.byV[c.v] || 0) + p);
   }
@@ -910,8 +943,9 @@ function serve(s, ctx, f, by) {
     tot.rushTips = round2(tot.rushTips + tips);
   }
   if (next(f.rng) < T.patch.hives.honeyBuy && patch.honeyTake(s, 1)) honey = S.honeyPrice;
-  if (f.species === 'beaver' && f.fulls.length && sum(f.fulls) / f.fulls.length >= SP.beaver.tipFull) {
-    tips = round2(tips + SP.beaver.tips[0] + Math.floor(next(f.rng) * (SP.beaver.tips[1] - SP.beaver.tips[0] + 1)));
+  if (f.species === 'beaver' && f.fulls.length && sum(f.fulls) / f.fulls.length >= (SP.beaver.tipFull ?? Infinity)) {
+    const [lo = 0, hi = 0] = SP.beaver.tips ?? [];
+    tips = round2(tips + lo + Math.floor(next(f.rng) * (hi - lo + 1)));
   }
   if (amount) ctx.money(amount, 'pumpkins');
   if (honey) ctx.money(honey, 'honey');
@@ -929,14 +963,14 @@ function serve(s, ctx, f, by) {
   if (by === 'you') ctx.goalDone('ringUp');
 }
 // Stars, reputation, buzz counters, the review ticker.
-function finish(s, ctx, f, forced) {
+function finish(s: State, ctx: Ctx, f: Family, forced?: number|undefined) {
   const sat = clamp(f.sat, S.sat.min, S.sat.max);
   const stars = forced ?? clamp(Math.round(sat / S.stars.div), S.stars.min, S.stars.max);
   f.stars = stars;
   const day = s.season.day, tot = s.season.totals;
   day.starsSum += stars; day.starsN++; tot.starsSum += stars; tot.starsN++;
-  tot.starsHist[stars - 1]++;
-  for (const k in f.why) tot.why[k] = (tot.why[k] || 0) + f.why[k];       // what moved satisfaction, summed (tuning)
+  tot.starsHist[stars - 1] = (tot.starsHist[stars - 1] ?? 0) + 1;
+  for (const k in f.why) tot.why[k] = (tot.why[k] || 0) + (f.why[k] ?? 0);       // what moved satisfaction, summed (tuning)
   if (stars === 5 && f.type === 'photo') { day.photo5++; viralRoll(s, ctx, f); }
   if (stars <= 2) day.low++;
   s.rep.R = round3(clamp(s.rep.R + S.R.k * (stars - s.rep.R), 1, 5));
@@ -944,27 +978,29 @@ function finish(s, ctx, f, forced) {
 }
 // A line nobody has posted lately: the species' own voice about half the time, else the general pool for the cause.
 // Recent lines (the last S.review.fresh) are skipped while an unused one is left.
-function reviewLine(s, f, own, pool) {
+function reviewLine(s: State, f: Family, mine: readonly string[] | null | undefined, pool: readonly string[] | undefined) {
   const recent = (s.season.recentLines ||= []);
-  const fresh = (xs) => (xs || []).filter((t) => !recent.includes(t));
-  const sp = fresh(own), gen = fresh(pool);
-  let list = sp.length && (!gen.length || next(f.rng) < 0.5) ? sp : gen;
-  if (!list.length) list = (own || []).concat(pool || []);
+  const fresh = (xs: readonly string[] | null | undefined) => (xs || []).filter((t) => !recent.includes(t));
+  const sp = fresh(mine), gen = fresh(pool);
+  let list: readonly string[] = sp.length && (!gen.length || next(f.rng) < 0.5) ? sp : gen;
+  if (!list.length) list = (mine || []).concat(pool || []);
   if (!list.length) return null;
   const text = list[Math.floor(next(f.rng) * list.length)];
+  if (text === undefined) return null;
   recent.push(text);
   if (recent.length > S.review.fresh) recent.shift();
   return text;
 }
-function review(s, ctx, f, stars) {
+function review(s: State, ctx: Ctx, f: Family, stars: number) {
   if (!(stars === 1 || stars === 5 || next(f.rng) < S.review.chance)) return;
   const ws = Object.entries(f.why);
   if (!ws.length) return;
   const pos = ws.filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]), neg = ws.filter(([, v]) => v < 0).sort((a, b) => a[1] - b[1]);
   const cause = (stars >= 4 ? pos[0] : stars <= 2 ? neg[0] : (Math.abs(pos[0]?.[1] || 0) >= Math.abs(neg[0]?.[1] || 0) ? pos[0] : neg[0]) || pos[0] || neg[0])?.[0];
-  const need = L.reviewsSpNeed[`${f.species}.${cause}`];
-  const own = need && !f.cart.some((c) => c.v === need) ? null : L.reviewsSp[f.species]?.[cause];
-  const text = reviewLine(s, f, own, L.reviewsBy[cause]);
+  if (cause === undefined) return;
+  const need = own(L.reviewsSpNeed, `${f.species}.${cause}`);
+  const mine = need && !f.cart.some((c) => c.v === need) ? null : own(own(L.reviewsSp, f.species) ?? {}, cause);
+  const text = reviewLine(s, f, mine, own(L.reviewsBy, cause));
   if (!text) return;
   const rv = { stars, species: f.species, text, cause, d: s.clock.day, m: s.clock.minute };
   s.season.reviews.unshift(rv);
@@ -972,11 +1008,11 @@ function review(s, ctx, f, stars) {
   ctx.emit({ type: 'season/review', ...rv });
   if (stars === 5) moment(s, 8, `“${text}”`);
 }
-function moment(s, score, text) {
+function moment(s: State, score: number, text: string) {
   const d = s.season.day;
   if (!d.best || score > d.best.score) d.best = { score, text };
 }
-function checkoutTick(s, ctx) {
+function checkoutTick(s: State, ctx: Ctx) {
   if (s.season.whale || !s.season.queue.length) return;                                       // checkout freezes while everybody watches the whale
   const g = s.season.gran, dz = s.season.dez, you = s.season.you;
   if (atStand(s) && you.buffer > 0 && queueReady(s)) { you.buffer--; serve(s, ctx, frontFamily(s), 'you'); }
@@ -988,34 +1024,34 @@ function checkoutTick(s, ctx) {
 // ------------------------------------------------------------ your farmer (attention is the resource)
 // Tasks are plain data: { k, step, wait, ...args }. STEPS lists each kind's legs: moves ('to:*'), waits ('wait:*')
 // and actions. A task resolves on arrival; anything you're away from keeps running at its automatic rate.
-const STEPS = {
+const STEPS: Record<string, string[]> = {
   go: ['to:dest'], restock: ['to:barn', 'wait:load', 'to:rowEnd', 'restock'], cut: ['to:row', 'wait:cut', 'cut'],
   fetch: ['to:barn', 'to:fam', 'fetch'], try: ['to:fam', 'try'], stray: ['to:stray', 'stray'], lever: ['to:lot', 'lever'],
   chase: ['to:event', 'chase'], treat: ['to:giant', 'wait:treat', 'treat'],
 };
 const MAX_TASKS = 4;
-function legTarget(s, t, leg) {
+function legTarget(s: State, t: SeasonFarmerTask, leg: string) {
   const what = leg.slice(3);
-  if (what === 'dest') return t.to === 'row' || t.to === 'patch' ? rowSpot(t.row ?? 0) : FARMER_SPOTS[t.to];
+  if (what === 'dest') return t.to === 'row' || t.to === 'patch' ? rowSpot(t.row ?? 0) : t.to ? own(FARMER_SPOTS, t.to) ?? null : null;
   if (what === 'barn') return FARMER_SPOTS.barn;
   if (what === 'lot') return FARMER_SPOTS.lot;
   if (what === 'giant') return FARMER_SPOTS.giant;
   if (what === 'row') { if (t.row == null) t.row = restockRow(s); return t.row == null ? null : rowSpot(t.row); }
   // the wagon pulls up at the row's west end, on the path beside it, and the fruit go in from there
-  if (what === 'rowEnd') { if (t.row == null) t.row = frontRestockRow(s); return t.row == null ? null : { x: NODES.aw0.x, z: aisleZ(t.row) }; }
+  if (what === 'rowEnd') { if (t.row == null) t.row = frontRestockRow(s); return t.row == null ? null : { x: nodeAt('aw0').x, z: aisleZ(t.row) }; }
   if (what === 'fam') { const f = famById(s, t.fam); return f ? { x: f.x, z: f.z } : null; }
   if (what === 'stray') return s.season.wagons.strays.find((w) => w.id === t.id) || null;
   if (what === 'event') return eventSpot(s, t.ev);
   return null;
 }
-function startStep(s, ctx) {
+function startStep(s: State, ctx: Ctx) {
   const F = s.season.farmer;
   for (let guard = 0; guard < 8; guard++) {
     const t = F.tasks[0];
     if (!t) { F.busy = false; F.target = null; F.since = s.clock.minute; return; }
     F.busy = true;
-    const leg = STEPS[t.k][t.step];
-    if (leg == null) {                                             // done: where did we end up?
+    const leg = own(STEPS, t.k)?.[t.step];
+    if (leg === undefined) {                                             // done: where did we end up?
       F.tasks.shift();
       if (t.k === 'go') F.at = t.to === 'row' ? 'patch' : t.to;
       else if (near(F, FARMER_SPOTS.stand.x, FARMER_SPOTS.stand.z, 0.5)) F.at = 'stand';
@@ -1041,12 +1077,12 @@ function startStep(s, ctx) {
     if (F.tasks[0] === t) t.step++;
   }
 }
-function farmerTick(s, ctx) {
+function farmerTick(s: State, ctx: Ctx) {
   const F = s.season.farmer, t = F.tasks[0];
   if (!t) { F.busy = false; return; }
   if (t.wait > 0) { if (--t.wait <= 0) { t.wait = 0; t.step++; startStep(s, ctx); } return; }
   // chasing something that moves (a family): re-aim when it has wandered off
-  if (STEPS[t.k][t.step] === 'to:fam') {
+  if (own(STEPS, t.k)?.[t.step] === 'to:fam') {
     const f = famById(s, t.fam);
     if (!f) { F.tasks.shift(); startStep(s, ctx); return; }
     if (!near(f, F.target?.x ?? f.x, F.target?.z ?? f.z, 1)) walkTo(F, f.x, f.z);
@@ -1055,7 +1091,7 @@ function farmerTick(s, ctx) {
   collectStrays(s, ctx);
   if (there) { t.step++; startStep(s, ctx); }
 }
-function collectStrays(s, ctx) {
+function collectStrays(s: State, ctx: Ctx) {
   const F = s.season.farmer, W = s.season.wagons;
   const got = W.strays.filter((w) => near(F, w.x, w.z, S.strayRadius));
   if (!got.length) return;
@@ -1065,68 +1101,68 @@ function collectStrays(s, ctx) {
   ctx.emit({ type: 'sound', name: 'plink', pitch: 1.2 });
   if (!W.strays.some((w) => w.lesson)) ctx.goalDone('wagons');
 }
-function restockRow(s) {
+function restockRow(s: State) {
   // the emptiest front row (rows 1-2 first), else the emptiest row
-  let best = null, bf = Infinity;
+  let best: number | null = null, bf = Infinity;
   s.patch.rows.forEach((row, r) => { if (!row.open) return; const f = patch.fullness(s, r) + (r < 2 ? -0.25 : 0) + r * 0.001; if (f < bf && patch.fullness(s, r) < 1) { bf = f; best = r; } });
   return best;
 }
 /** The row your farmer's restock wagon is bound for (the camera frames the haul as it is loaded), or null. */
-export function haulRow(s) {
+export function haulRow(s: State) {
   const t = s.season.farmer.tasks[0];
   return t?.k === 'restock' ? t.row ?? frontRestockRow(s) : null;
 }
 // "Restock" with no row picked (design §7: the emptiest front row): the emptiest of the three rows by the lane that has
 // room, else the emptiest row anywhere. A row's own Restock button picks that row.
-function frontRestockRow(s) {
-  let best = null, bf = Infinity;
+function frontRestockRow(s: State) {
+  let best: number | null = null, bf = Infinity;
   for (let r = 0; r < 3; r++) { const row = s.patch.rows[r]; if (!row?.open) continue; const f = patch.fullness(s, r); if (f < 0.9 && f < bf) { bf = f; best = r; } }
   return best ?? restockRow(s);
 }
-function act(s, ctx, t, leg) {
+function act(s: State, ctx: Ctx, t: SeasonFarmerTask, leg: string) {
   const F = s.season.farmer;
   switch (leg) {
     case 'restock': {
       F.carry = null;
-      const n = patch.restockRow(s, t.row, S.actions.restockN);
-      if (n) {
-        ctx.emit({ type: 'patch/restock', row: t.row, n, by: 'farmer' });
+      const row = t.row, n = row === null ? 0 : patch.restockRow(s, row, S.actions.restockN);
+      if (row !== null && n) {
+        ctx.emit({ type: 'patch/restock', row, n, by: 'farmer' });
         ctx.goalDone('restock');
       } else ctx.emit({ type: 'toast', text: patch.barnStock(s) ? 'That row is full.' : L.loadEmpty, cls: 'warn', icon: 'barn' });
       F.at = 'patch';
       break;
     }
     case 'cut': {
-      const n = patch.cutToBarn(s, t.row);
-      if (n) { ctx.emit({ type: 'patch/cut', row: t.row, n }); ctx.emit({ type: 'toast', text: fill(patch.LINES.toast.cut, { n }), cls: 'good', icon: 'barn' }); }
+      const row = t.row, n = row === null ? 0 : patch.cutToBarn(s, row);
+      if (row !== null && n) { ctx.emit({ type: 'patch/cut', row, n }); ctx.emit({ type: 'toast', text: fill(patch.LINES.toast.cut, { n }), cls: 'good', icon: 'barn' }); }
       F.at = 'patch';
       break;
     }
     case 'fetch': case 'try': answerArrive(s, ctx, t); break;
     case 'stray': collectStrays(s, ctx); break;
-    case 'lever': applyLever(s, ctx, t.id, t.on); F.at = 'lot'; break;
+    case 'lever': if (t.id !== null) applyLever(s, ctx, t.id, t.on); F.at = 'lot'; break;
     case 'chase': chaseArrive(s, ctx, t); break;
     case 'treat': {
       const g = ctx.mod('giant').default.actions['giant/treat'];
-      const r = g(s, { plot: t.plot }, ctx);
-      if (!r.ok) ctx.emit({ type: 'toast', text: r.reason, cls: 'warn' });
+      const r = g(s, { type: 'giant/treat', plot: t.plot ?? 1 }, ctx);
+      if (r && !r.ok && r.reason) ctx.emit({ type: 'toast', text: r.reason, cls: 'warn' });
       F.at = 'giant';
       break;
     }
   }
 }
 // Every task has the same fields (one object shape); unused ones stay null.
-function taskOf(a) {
-  const t = { k: null, to: null, row: null, fam: null, want: null, v: null, id: null, on: null, ev: null, plot: null, step: 0, wait: 0 };
-  for (const key in a) if (a[key] !== undefined) t[key] = a[key];
-  return t;
+type TaskArgs = Partial<Omit<SeasonFarmerTask, 'step' | 'wait'>> & { k: string };
+function taskOf(a: TaskArgs): SeasonFarmerTask {
+  return { k: a.k, to: a.to ?? null, row: a.row ?? null, fam: a.fam ?? null, want: a.want ?? null, v: a.v ?? null, id: a.id ?? null,
+    on: a.on ?? null, ev: a.ev ?? null, plot: a.plot ?? null, step: 0, wait: 0 };
 }
-function addTask(s, ctx, a) {
+function addTask(s: State, ctx: Ctx, a: TaskArgs) {
   const F = s.season.farmer, t = taskOf(a);
   if (t.k === 'go') {
     // a new destination replaces any trip that is only a trip
-    F.tasks = F.tasks.filter((x, i) => x.k !== 'go' || (i === 0 && false));
-    if (F.tasks.length && F.tasks[0].k !== 'go') { F.tasks.push(t); return true; }
+    F.tasks = F.tasks.filter((x) => x.k !== 'go');
+    if (F.tasks.length && F.tasks[0]?.k !== 'go') { F.tasks.push(t); return true; }
     F.tasks.unshift(t);
     startStep(s, ctx);
     return true;
@@ -1134,7 +1170,7 @@ function addTask(s, ctx, a) {
   if (F.tasks.length >= MAX_TASKS) return false;
   // don't stack the same errand twice
   if (F.tasks.some((x) => x.k === t.k && x.fam === t.fam && x.id === t.id && x.ev === t.ev && x.row === t.row && t.k !== 'restock')) return false;
-  const idle = !F.tasks.length || F.tasks[0].k === 'go';
+  const idle = !F.tasks.length || F.tasks[0]?.k === 'go';
   if (idle) F.tasks = F.tasks.filter((x) => x.k !== 'go');
   F.tasks.push(t);
   if (idle) startStep(s, ctx);
@@ -1142,7 +1178,7 @@ function addTask(s, ctx, a) {
 }
 
 // ------------------------------------------------------------ want bubbles: Fetch from barn, or Try ___
-function answerArrive(s, ctx, t) {
+function answerArrive(s: State, ctx: Ctx, t: SeasonFarmerTask) {
   const f = famById(s, t.fam);
   if (!f || LEAVING.has(f.state) || f.state === 'queue' || f.state === 'toQueue') return;
   const w = openWants(f).find((x) => x.v === t.want) || openWants(f)[0];
@@ -1151,21 +1187,23 @@ function answerArrive(s, ctx, t) {
     if (!patch.barnTake(s, w.v, 1)) { ctx.emit({ type: 'toast', text: fill(L.noBarn, { variety: vname(w.v) }), cls: 'warn', icon: 'barn' }); return; }
     f.cart.push({ v: w.v, soft: false, tr: false, kid: w.kid });
     w.st = 'got'; w.got = w.v;
-    if (w.kid) f.kids[w.k].got = true;
+    const kid = f.kids[w.k];
+    if (w.kid && kid) kid.got = true;
     mod(f, 'fetch', w.kid ? S.sat.kid : S.actions.fetchSat);
     s.season.day.fetches++; s.season.totals.fetched++;
-    moment(s, 18, fill(L.moments.fetch, { many: NAMES[f.species]?.many ?? f.species }));
+    moment(s, 18, fill(L.moments.fetch, { many: own(NAMES, f.species)?.many ?? f.species }));
     ctx.emit({ type: 'season/answer', id: f.id, ok: true, how: 'fetch', v: w.v, x: f.x, z: f.z });
     ctx.emit({ type: 'toast', text: L.fetched, cls: 'good', icon: 'barn' });
     f.kids.forEach((k) => { k.hop = 1; });
   } else {
-    const rs = patch.rowsWithPrime(s, t.v);
+    const tv = t.v, rs = patch.rowsWithPrime(s, tv);
+    const r0 = rs[0];
     const p = f.script === 'fox' ? 1 : f.type === 'regular' ? S.actions.tryRegular : S.actions.tryAccept;
-    if (rs.length && next(f.rng) < p && buy(s, ctx, f, rs[0], w, t.v, 'sug')) {
-      ctx.emit({ type: 'season/answer', id: f.id, ok: true, how: 'try', v: t.v, x: f.x, z: f.z });
-      ctx.emit({ type: 'toast', text: fill(L.tryYes, { variety: vname(t.v) }), cls: 'good', icon: 'pumpkin' });
+    if (r0 !== undefined && tv && next(f.rng) < p && buy(s, ctx, f, r0, w, tv, 'sug')) {
+      ctx.emit({ type: 'season/answer', id: f.id, ok: true, how: 'try', v: tv, x: f.x, z: f.z });
+      ctx.emit({ type: 'toast', text: fill(L.tryYes, { variety: vname(tv) }), cls: 'good', icon: 'pumpkin' });
     } else {
-      ctx.emit({ type: 'season/answer', id: f.id, ok: false, how: 'try', v: t.v });
+      ctx.emit({ type: 'season/answer', id: f.id, ok: false, how: 'try', v: tv ?? '' });
       ctx.emit({ type: 'toast', text: fill(L.tryNo, { want: vname(w.v) }), cls: 'warn', icon: 'pumpkin' });
     }
   }
@@ -1175,7 +1213,7 @@ function answerArrive(s, ctx, t) {
 }
 
 // ------------------------------------------------------------ traffic levers
-function applyLever(s, ctx, id, on) {
+function applyLever(s: State, ctx: Ctx, id: string, on: boolean | null) {
   const se = s.season;
   if (id === 'beach') {
     se.parking.beachOpen = on ?? !se.parking.beachOpen;
@@ -1192,24 +1230,26 @@ function applyLever(s, ctx, id, on) {
 
 // ------------------------------------------------------------ events that need your farmer (design §10)
 const HIDE = Object.keys(HIDEOUTS);
-function eventSpot(s, ev) {
+function eventSpot(s: State, ev: string | null) {
+  if (ev === null) return null;
   const a = getActive(s, ev);
   if (ev === 'goat') return s.season.goat ? { x: s.season.goat.x, z: s.season.goat.z } : null;
   if (ev === 'toddler_giant') return a ? FARMER_SPOTS.giant : null;
   if (ev === 'dez_wanders') return a ? { x: PLACES.hayfort.x + 0.8, z: PLACES.hayfort.z + 1.2 } : null;
-  return a ? { x: a.x, z: a.z } : null;
+  return a && a.x !== undefined && a.z !== undefined ? { x: a.x, z: a.z } : null;
 }
-function chaseArrive(s, ctx, t) {
+function chaseArrive(s: State, ctx: Ctx, t: SeasonFarmerTask) {
   const C = CAT;
   if (t.ev === 'goat') {
     const g = s.season.goat;
     if (!g) return;
     g.shoo++;
     if (g.shoo >= C.goat.taps) return goatLeaves(s, ctx);
-    ctx.emit({ type: 'toast', text: L.goatShoo[g.shoo % L.goatShoo.length], cls: 'event', icon: 'sparkle' });
+    ctx.emit({ type: 'toast', text: L.goatShoo[g.shoo % L.goatShoo.length] ?? '', cls: 'event', icon: 'sparkle' });
     // she dodges to another row
-    const rows = s.patch.rows.map((row, r) => r).filter((r) => r !== g.row && patch.primeStock(s, r) > 0);
-    if (rows.length) { g.row = rows[(g.shoo * 7 + g.ate) % rows.length]; g.x = r3(clamp(g.x + (g.shoo % 2 ? C.goat.hop : -C.goat.hop), -8, 5)); g.z = aisleZ(g.row); }
+    const rows = s.patch.rows.map((_row, r) => r).filter((r) => r !== g.row && patch.primeStock(s, r) > 0);
+    const nr = rows[(g.shoo * 7 + g.ate) % rows.length];
+    if (nr !== undefined) { g.row = nr; g.x = r3(clamp(g.x + (g.shoo % 2 ? C.goat.hop : -C.goat.hop), -8, 5)); g.z = aisleZ(g.row); }
     ctx.emit({ type: 'season/goat', state: 'dodge', x: g.x, z: g.z });
     activate(s, { id: 'goat', until: s.clock.day, x: g.x, z: g.z, data: null });
   } else if (t.ev === 'lost_joey') {
@@ -1218,18 +1258,20 @@ function chaseArrive(s, ctx, t) {
     joeyFound(s, ctx, a);
   } else if (t.ev === 'toddler_giant') {
     const a = getActive(s, 'toddler_giant');
-    if (!a || a.data.posing) return;
-    a.data.posing = true;
+    const d = a?.data;
+    if (!d || d.posing) return;
+    d.posing = true;
     t.wait = C.toddler_giant.poseTicks;                              // stand there and let them pose
   } else if (t.ev === 'proposal') {
     const a = getActive(s, 'proposal');
     if (!a) return;
-    s.season.closed[a.data.row] = s.clock.minute + C.proposal.ticks;
+    const row = a.data?.row ?? 0;
+    s.season.closed[row] = s.clock.minute + C.proposal.ticks;
     s.rep.R = round3(clamp(s.rep.R + C.proposal.dR, 1, 5));
     deactivate(s, 'proposal');
-    ctx.story('proposal', 30, { row: a.data.row + 1 });
-    moment(s, 40, fill(L.moments.proposal, { row: a.data.row + 1 }));
-    ctx.emit({ type: 'toast', text: fill(L.proposalGiven, { row: a.data.row + 1 }), cls: 'good', icon: 'sparkle' });
+    ctx.story('proposal', 30, { row: row + 1 });
+    moment(s, 40, fill(L.moments.proposal, { row: row + 1 }));
+    ctx.emit({ type: 'toast', text: fill(L.proposalGiven, { row: row + 1 }), cls: 'good', icon: 'sparkle' });
     ctx.emit({ type: 'sound', name: 'done' });
   } else if (t.ev === 'dez_wanders') {
     s.season.dez.away = false; s.season.dez.t = 0;
@@ -1237,7 +1279,7 @@ function chaseArrive(s, ctx, t) {
     ctx.emit({ type: 'toast', text: L.dezBack, cls: 'good', icon: 'stand' });
   }
 }
-function goatLeaves(s, ctx) {
+function goatLeaves(s: State, ctx: Ctx) {
   const g = s.season.goat;
   if (!g) return;
   ctx.emit({ type: 'toast', text: fill(L.goatGone, { n: g.ate }), cls: 'event', icon: 'sparkle' });
@@ -1249,63 +1291,63 @@ function goatLeaves(s, ctx) {
   deactivate(s, 'goat');
 }
 // A hideout id as the toast says it: 'hayfort' -> 'hay fort', 'barnDoor' -> 'barn door'.
-const spotName = (id) => ({ hayfort: 'hay fort', sail: 'shade sail' }[id] || id.replace(/([A-Z])/g, ' $1').toLowerCase());
-function joeyFound(s, ctx, a) {
-  const C = CAT.lost_joey, f = famById(s, a.data.fam);
+const spotName = (id: string) => (own({ hayfort: 'hay fort', sail: 'shade sail' }, id) || id.replace(/([A-Z])/g, ' $1').toLowerCase());
+function joeyFound(s: State, ctx: Ctx, a: EventsActive) {
+  const C = CAT.lost_joey, f = famById(s, a.data?.fam);
   if (f) { mod(f, 'joey', C.family); f.joey = false; }
   for (const x of s.season.families) if (x !== f && !LEAVING.has(x.state)) mod(x, 'joey', C.everyone);
   s.rep.buzz = round3(clamp((s.rep.buzz || 0) + C.buzz, S.buzz[0], S.buzz[1]));
-  const spot = spotName(a.data.spot || 'hayfort');
+  const spot = spotName(a.data?.spot || 'hayfort');
   ctx.emit({ type: 'toast', text: fill(L.joeyFound, { spot }), cls: 'good', icon: 'sparkle' });
-  ctx.emit({ type: 'season/joey', state: 'found', x: a.x, z: a.z, spot: a.data.spot });
+  ctx.emit({ type: 'season/joey', state: 'found', x: a.x ?? 0, z: a.z ?? 0, ...(a.data?.spot !== undefined && { spot: a.data.spot }) });
   ctx.emit({ type: 'sound', name: 'done' });
-  ctx.story('joey', 35, { R: nearestRow(a.z) + 1, spot });
+  ctx.story('joey', 35, { R: nearestRow(a.z ?? 0) + 1, spot });
   moment(s, 35, fill(L.moments.joey, { spot }));
   deactivate(s, 'joey_pin'); deactivate(s, 'lost_joey');
   ctx.goalDone('pins');
   if (f) viralRoll(s, ctx, f, true);
 }
-const nearestRow = (z) => clamp(Math.round((z + 1) / 2), 0, 6);
+const nearestRow = (z: number) => clamp(Math.round((z + 1) / 2), 0, 6);
 
 // viral (chain): a 5-star Photo Family at golden hour, with a displayed shiny, or a joey reunion. 30% (fox x2, golden x1.5).
-function viralRoll(s, ctx, f, joey = false) {
+function viralRoll(s: State, ctx: Ctx, f: Family, joey = false) {
   const C = CAT.viral, wi = weekendIndex(s.clock.day);
   if (s.season.viralW === wi) return;
   const cause = joey || f.golden || s.patch.shinies.some((x) => x.state === 'display');
   if (!cause || f.type !== 'photo' && !joey) return;
-  const p = C.chance * (f.species === 'fox' ? SP.fox.viral : 1) * (f.golden ? CAT.golden_hour.viralMul : 1);
+  const p = C.chance * (f.species === 'fox' ? SP.fox.viral ?? 1 : 1) * (f.golden ? CAT.golden_hour.viralMul : 1);
   if (next(ctx.rng('events')) < p) fireNow(s, ctx, 'viral');
 }
-function goldenFor(f) {
+function goldenFor(f: Family) {
   if (f.golden) return;
   f.golden = true;
   mod(f, 'golden', f.type === 'photo' ? CAT.golden_hour.photoSat : CAT.golden_hour.sat);
 }
 // a green puff: families inside the radius drop what they're doing and pick a row outside it
-const startle = (s, ctx, x, z) => fireNow(s, ctx, 'skunk_startle', { x, z });
+const startle = (s: State, ctx: Ctx, x: any, z: any) => fireNow(s, ctx, 'skunk_startle', { x, z });
 
 // ------------------------------------------------------------ the catalogue (design §10)
 // Surprises keep their real-time pace (design §10 counts notables a minute at 1x): the catalogue's chances are per
 // 60-second selling day, and a day now runs (CLOSE - OPEN) / TPS seconds, so they are scaled by PACE (80 / 60).
 const PACE = (CLOSE - OPEN) / TPS / 60;
 const RATES = new Map();
-const tickRate = (perDay, ticks = GATE_CLOSE - OPEN) => {
+const tickRate = (perDay: number, ticks = GATE_CLOSE - OPEN) => {
   const k = perDay * 1e4 + ticks;
   let p = RATES.get(k);
   if (p === undefined) RATES.set(k, (p = 1 - Math.pow(1 - Math.min(1, perDay * PACE), 1 / ticks)));
   return p;
 };
-const onSite = (s) => s.season.families.filter((f) => !LEAVING.has(f.state));
-const browsing = (f) => !LEAVING.has(f.state) && f.state !== 'queue' && f.state !== 'toQueue';
-const someRowPrime = (s) => s.patch.rows.some((row) => row.stock.prime > 0);
-const EVENTS = [
+const onSite = (s: State) => s.season.families.filter((f) => !LEAVING.has(f.state));
+const browsing = (f: Family) => !LEAVING.has(f.state) && f.state !== 'queue' && f.state !== 'toQueue';
+const someRowPrime = (s: State) => s.patch.rows.some((row) => row.stock.prime > 0);
+const EVENTS: DirectorEvent[] = [
   { // goat (notable): Pamela from next door eats 1 pumpkin per 15 ticks from the nearest row until shooed (3 taps)
     id: 'goat', cls: 'notable', per: 'tick', cooldownDays: CAT.goat.cooldown, capSeason: CAT.goat.capSeason,
-    when: (s) => weekendNow(s) && weekendIndex(s.clock.day) + 1 >= CAT.goat.fromWeekend && s.clock.minute >= CAT.goat.after
+    when: (s: State) => weekendNow(s) && weekendIndex(s.clock.day) + 1 >= CAT.goat.fromWeekend && s.clock.minute >= CAT.goat.after
       && s.clock.minute < GATE_CLOSE && !s.season.goat && pinsOk(s) && someRowPrime(s),
     rate: () => tickRate(CAT.goat.rate, GATE_CLOSE - CAT.goat.after),
-    fire(s, ctx) {
-      const rows = s.patch.rows.map((row, r) => r).filter((r) => patch.primeStock(s, r) > 0);
+    fire(s: State, ctx: Ctx) {
+      const rows = s.patch.rows.map((_row, r) => r).filter((r) => patch.primeStock(s, r) > 0);
       const row = rows.at(-1) ?? 0;
       s.season.goat = { x: 6.2, z: aisleZ(row), row, ate: 0, shoo: 0, t: 0 };
       activate(s, { id: 'goat', until: s.clock.day, x: 6.2, z: aisleZ(row), data: null });
@@ -1331,13 +1373,14 @@ const EVENTS = [
   },
   { // lost joey (notable): 10% per possum family; a joey hides at 1 of 8 spots; Biscuit barks toward it after 3 s
     id: 'lost_joey', cls: 'notable', per: 'tick', cooldownDays: CAT.lost_joey.cooldown, capYear: CAT.lost_joey.cap,
-    when: (s) => weekendNow(s) && s.season.census.possums > 0 && pinsOk(s) && !isActive(s, 'lost_joey') && s.clock.minute < S.closing,
-    rate: (s) => 1 - Math.pow(1 - CAT.lost_joey.rate, (s.season.census.possums / 90) * PACE),
+    when: (s: State) => weekendNow(s) && s.season.census.possums > 0 && pinsOk(s) && !isActive(s, 'lost_joey') && s.clock.minute < S.closing,
+    rate: (s: State) => 1 - Math.pow(1 - CAT.lost_joey.rate, (s.season.census.possums / 90) * PACE),
     fire(s, ctx, data) {
       const C = CAT.lost_joey;
       const f = data?.fam ? famById(s, data.fam) : s.season.families.find((x) => x.species === 'possum' && browsing(x));
       if (!f) return;
-      const spot = data?.spot || HIDE[Math.floor(next(ctx.rng('events')) * HIDE.length)], p = HIDEOUTS[spot];
+      const spot = data.spot || HIDE[Math.floor(next(ctx.rng('events')) * HIDE.length)] || 'hayfort', p = own(HIDEOUTS, spot);
+      if (!p) return;
       f.joey = true;
       activate(s, { id: 'lost_joey', until: s.clock.day, x: p.x, z: p.z, data: { fam: f.id, spot, end: s.clock.minute + (data?.ticks || C.findTicks), bark: s.clock.minute + sec(C.barkSeconds) } });
       ctx.emit({ type: 'season/joey', state: 'lost', x: p.x, z: p.z, spot, fam: f.id });
@@ -1345,11 +1388,11 @@ const EVENTS = [
   },
   { // golden hour (notable, weather-driven): weekend 15:00-16:30 when Marlene is thin (50%) or a heat wave (always)
     id: 'golden_hour', cls: 'notable', per: 'tick', urgent: true, cooldownDays: 1,
-    when: (s) => weekendNow(s) && s.season.day.golden && !s.season.golden && s.clock.minute >= CAT.golden_hour.from && s.clock.minute < CAT.golden_hour.to,
+    when: (s: State) => weekendNow(s) && s.season.day.golden && !s.season.golden && s.clock.minute >= CAT.golden_hour.from && s.clock.minute < CAT.golden_hour.to,
     rate: () => 1,
-    fire(s, ctx) {
+    fire(s: State, ctx: Ctx) {
       s.season.golden = true;
-      activate(s, { id: 'golden_hour', until: s.clock.day, x: null, z: null, data: null });
+      activate(s, { id: 'golden_hour', until: s.clock.day, data: null });
       for (const f of onSite(s)) goldenFor(f);
       moment(s, 15, L.moments.golden);
       const C = CAT.proposal;
@@ -1358,7 +1401,7 @@ const EVENTS = [
   },
   { // viral (chain): next selling day +35% arrivals, buzz +0.35, one per weekend
     id: 'viral', cls: 'chain', per: 'day', when: () => false, rate: () => 0,
-    fire(s, ctx) {
+    fire(s: State, ctx: Ctx) {
       const C = CAT.viral;
       s.season.viralW = weekendIndex(s.clock.day);
       s.season.next.viral = nextWeekendDay(s.clock.day);
@@ -1372,13 +1415,13 @@ const EVENTS = [
   },
   { // pea soup (notable, weather): arrivals x0.65 (in N_day), families linger +20%, cosy +3
     id: 'pea_soup', cls: 'notable', per: 'day', urgent: true,
-    when: (s) => weekendNow(s) && s.weather.f > CAT.pea_soup.f, rate: () => 1,
+    when: (s: State) => weekendNow(s) && s.weather.f > CAT.pea_soup.f, rate: () => 1,
     fire() {},
   },
   { // Big Tom's pumpkin cannon backfires (notable): skunks startle; next selling day +15%
     id: 'big_tom_backfire', cls: 'notable', per: 'tick', cooldownDays: CAT.big_tom_backfire.cooldown,
-    when: (s) => weekendNow(s) && s.clock.minute < GATE_CLOSE, rate: () => tickRate(CAT.big_tom_backfire.rate),
-    fire(s, ctx) {
+    when: (s: State) => weekendNow(s) && s.clock.minute < GATE_CLOSE, rate: () => tickRate(CAT.big_tom_backfire.rate),
+    fire(s: State, ctx: Ctx) {
       s.season.next.backfire = nextWeekendDay(s.clock.day);
       ctx.emit({ type: 'sound', name: 'thunk' });
       const sk = onSite(s).find((f) => f.species === 'skunk');
@@ -1387,9 +1430,9 @@ const EVENTS = [
   },
   { // runaway pumpkin (minor): rolls down the lane toward the beach; tap within 5 s and Biscuit fetches it ($8)
     id: 'runaway_pumpkin', cls: 'minor', per: 'tick', cooldownDays: CAT.runaway_pumpkin.cooldown,
-    when: (s) => weekendNow(s) && pinsOk(s) && !s.season.runaway && s.clock.minute < S.closing && patch.primeStock(s, 0) > 0,
+    when: (s: State) => weekendNow(s) && pinsOk(s) && !s.season.runaway && s.clock.minute < S.closing && patch.primeStock(s, 0) > 0,
     rate: () => 1 - Math.pow(1 - CAT.runaway_pumpkin.perHour, PACE / 60),
-    fire(s, ctx) {
+    fire(s: State, ctx: Ctx) {
       const C = CAT.runaway_pumpkin, v = patch.displayVariety(s.patch.rows[0]) || 'classic';
       if (!patch.take(s, 0, null, 1)) return;
       s.season.runaway = { x: C.roll[0], z: -3.9, v, end: s.clock.minute + sec(C.tapSeconds) };
@@ -1398,7 +1441,7 @@ const EVENTS = [
       const sk = onSite(s).find((f) => f.species === 'skunk' && near(f, C.roll[0], -3.9, CAT.skunk_startle.radius));
       if (sk) startle(s, ctx, sk.x, sk.z);                          // a dropped pumpkin near a skunk family
     },
-    tap(s, ctx) {
+    tap(s: State, ctx: Ctx) {
       const rp = s.season.runaway;
       if (!rp) return;
       s.season.runaway = null;
@@ -1412,10 +1455,10 @@ const EVENTS = [
   },
   { // toddler at the giant (notable, Y3+): pose with them (20 ticks) for +20 and buzz; ignore them, -5
     id: 'toddler_giant', cls: 'notable', per: 'tick', cooldownDays: CAT.toddler_giant.cooldown,
-    when: (s) => weekendNow(s) && s.clock.year >= CAT.toddler_giant.fromYear && !isActive(s, 'toddler_giant')
+    when: (s: State) => weekendNow(s) && s.clock.year >= CAT.toddler_giant.fromYear && !isActive(s, 'toddler_giant')
       && s.season.census.gawk > 0 && giant.hasFruit(s.giant) && giant.publishedEstimate(s, s.giant) >= CAT.toddler_giant.est,
     rate: () => tickRate(CAT.toddler_giant.rate, CAT.toddler_giant.gawkTicks),
-    fire(s, ctx) {
+    fire(s) {
       const f = onSite(s).find((x) => x.state === 'gawk');
       if (!f) return;
       f.state = 'toddler';
@@ -1425,32 +1468,32 @@ const EVENTS = [
   },
   { // possum carpool (minor): one mom carrying four joeys; the other mom plays dead in a wagon
     id: 'possum_carpool', cls: 'minor', per: 'day', when: () => false, rate: () => 0,
-    fire(s, ctx, data) { const f = famById(s, data?.id); if (f) f.carpool = true; },
+    fire(s, _ctx, data) { const f = famById(s, data.id); if (f) f.carpool = true; },
     text: () => L.carpool,
   },
   { // proposal (story, Y2+): a fox couple in the patch at golden hour; give them the row: R +0.1, a Crier brief
     id: 'proposal', cls: 'story', per: 'day', capYear: 1, when: () => false, rate: () => 0,
-    fire(s, ctx) {
+    fire(s) {
       let row = 0, best = -1;
       s.patch.rows.forEach((x, r) => { if (x.open && patch.fullness(s, r) > best) { best = patch.fullness(s, r); row = r; } });
-      activate(s, { id: 'proposal', until: s.clock.day, x: PICK_X[1], z: aisleZ(row), data: { row, end: s.clock.minute + CAT.proposal.window } });
+      activate(s, { id: 'proposal', until: s.clock.day, x: pickX(1), z: aisleZ(row), data: { row, end: s.clock.minute + CAT.proposal.window } });
     },
-    text: (s) => fill(L.proposal, { row: (getActive(s, 'proposal')?.data.row ?? 0) + 1 }),
+    text: (s: State) => fill(L.proposal, { row: (getActive(s, 'proposal')?.data?.row ?? 0) + 1 }),
   },
   { // Dez wanders off to the hay fort (minor): register lane 2 stops until you fetch him
     id: 'dez_wanders', cls: 'minor', per: 'tick', cooldownDays: 1,
-    when: (s) => weekendNow(s) && hired(s, 'dez') && !s.season.dez.away && s.clock.minute >= CAT.dez_wanders.from && s.clock.minute < CAT.dez_wanders.to,
+    when: (s: State) => weekendNow(s) && hired(s, 'dez') && !s.season.dez.away && s.clock.minute >= CAT.dez_wanders.from && s.clock.minute < CAT.dez_wanders.to,
     rate: () => tickRate(CAT.dez_wanders.rate, CAT.dez_wanders.to - CAT.dez_wanders.from),
-    fire(s) { s.season.dez.away = true; activate(s, { id: 'dez_wanders', until: s.clock.day, x: PLACES.hayfort.x, z: PLACES.hayfort.z, data: null }); },
+    fire(s: State) { s.season.dez.away = true; activate(s, { id: 'dez_wanders', until: s.clock.day, x: PLACES.hayfort.x, z: PLACES.hayfort.z, data: null }); },
   },
   { // the Old-Timer (minor): one review a weekend in the ticker, from year 2 (when Old-Timers start coming, design §3)
     id: 'old_timer', cls: 'minor', per: 'tick',
-    when: (s) => weekendNow(s) && s.clock.year >= SP.types.oldTimer.fromYear && s.season.census.on > 0 && s.season.oldTimerW !== weekendIndex(s.clock.day) && s.clock.minute > 600,
+    when: (s: State) => weekendNow(s) && s.clock.year >= SP.types.oldTimer.fromYear && s.season.census.on > 0 && s.season.oldTimerW !== weekendIndex(s.clock.day) && s.clock.minute > 600,
     rate: () => 1 / 500,
-    fire(s, ctx) {
+    fire(s: State, ctx: Ctx) {
       s.season.oldTimerW = weekendIndex(s.clock.day);
       const rec = (s.giant?.history || []).some((h) => (h.result?.W || 0) >= T.rivals.record.W);
-      const text = rec ? L.oldTimerRecord : L.oldTimer[(s.clock.day + s.clock.year) % L.oldTimer.length];
+      const text = rec ? L.oldTimerRecord : L.oldTimer[(s.clock.day + s.clock.year) % L.oldTimer.length] ?? '';
       const rv = { stars: 3, species: s.clock.day % 2 ? 'owl' : 'beaver', text, cause: 'oldTimer', d: s.clock.day, m: s.clock.minute };
       s.season.reviews.unshift(rv);
       if (s.season.reviews.length > S.review.keep) s.season.reviews.length = S.review.keep;
@@ -1461,9 +1504,9 @@ const EVENTS = [
   { // a whale off the bluff on a weekend (notable): half the crowd walks to the beach for 40 ticks; checkout freezes;
     // everyone +8 on return. A quiet restock window.
     id: 'whale_weekend', cls: 'notable', per: 'tick', capSeason: CAT.whale.capSeason,
-    when: (s) => weekendNow(s) && s.season.census.on >= 4 && s.weather.f < CAT.whale.f && !s.season.whale && s.clock.minute < S.closing - CAT.whale.crowdTicks,
+    when: (s: State) => weekendNow(s) && s.season.census.on >= 4 && s.weather.f < CAT.whale.f && !s.season.whale && s.clock.minute < S.closing - CAT.whale.crowdTicks,
     rate: () => tickRate(CAT.whale.weekendRate),
-    fire(s, ctx) {
+    fire(s: State, ctx: Ctx) {
       const C = CAT.whale;
       s.season.whale = { end: s.clock.minute + C.crowdTicks };
       activate(s, { id: 'whale_weekend', until: s.clock.day, x: PLACES.whale.x, z: PLACES.whale.z, data: null });
@@ -1482,38 +1525,38 @@ const EVENTS = [
   },
   { // Hotel Marlene's decorator order (notable, Y3+, Sep 5, 50%/yr): 40 by Friday Oct 9 at x1.3; a miss costs R -0.1
     id: 'decorator_order', cls: 'notable', per: 'day', capYear: 1, urgent: true,
-    when: (s) => s.clock.phase === 'grow' && s.clock.year >= CAT.decorator_order.fromYear && s.clock.day >= D(CAT.decorator_order.date)
+    when: (s: State) => s.clock.phase === 'grow' && s.clock.year >= CAT.decorator_order.fromYear && s.clock.day >= D(CAT.decorator_order.date)
       && s.clock.day < D(CAT.decorator_order.date) + 5 && u01(s.seed, s.clock.year, 'decorator') < CAT.decorator_order.chance,
     rate: () => 1,
-    fire(s, ctx) {
+    fire(s: State, ctx: Ctx) {
       const v = VT.cinderella.unlock <= s.clock.year && s.patch.rows.some((r) => r.variety === 'cinderella' || r.plan?.variety === 'cinderella') ? 'cinderella' : 'classic';
       const D2 = L.decorator, V = vname(v);
-      ctx.card('decorator', { speaker: 'mayor', eyebrow: D2.eyebrow, title: D2.title, text: fill(D2.text, { Variety: V }), variety: v,
-        choices: [{ id: 'yes', label: D2.yes, sub: fill(D2.yesSub, { Variety: V }), primary: true }, { id: 'no', label: D2.no, sub: D2.noSub }], defaultChoice: 'no' });
+      ctx.card({ kind: 'decorator', data: { speaker: 'mayor', eyebrow: D2.eyebrow, title: D2.title, text: fill(D2.text, { Variety: V }), variety: v,
+        choices: [{ id: 'yes', label: D2.yes, sub: fill(D2.yesSub, { Variety: V }), primary: true }, { id: 'no', label: D2.no, sub: D2.noSub }], defaultChoice: 'no' } });
     },
   },
 ];
 
 // ------------------------------------------------------------ per-tick event upkeep
-function eventsTick(s, ctx) {
+function eventsTick(s: State, ctx: Ctx) {
   const m = s.clock.minute, se = s.season;
   // Pamela eats one pumpkin every 15 ticks from her row
   const g = se.goat;
   if (g && ++g.t % CAT.goat.eatTicks === 0) {
-    if (!patch.primeStock(s, g.row)) { const rs = patch.rowsWithPrime(s); if (rs.length) { g.row = rs.at(-1); g.z = aisleZ(g.row); } }
+    if (!patch.primeStock(s, g.row)) { const lr = patch.rowsWithPrime(s).at(-1); if (lr !== undefined) { g.row = lr; g.z = aisleZ(lr); } }
     if (patch.take(s, g.row, null, 1)) { g.ate++; ctx.emit({ type: 'season/goat', state: 'eat', x: g.x, z: g.z, row: g.row }); }
   }
   // the joey: Biscuit barks toward him after 3 s; at the end of the window mom finds him playing dead
   const anyActive = s.events.active.length > 0;
-  const j = anyActive && getActive(s, 'lost_joey');
-  if (j) {
-    if (m === j.data.bark) { ctx.emit({ type: 'cast', who: 'biscuit', act: 'bark' }); ctx.emit({ type: 'season/joey', state: 'bark', x: j.x, z: j.z, spot: j.data.spot }); ctx.emit({ type: 'sound', name: 'bark' }); }
-    if (m >= j.data.end) {
-      const f = famById(s, j.data.fam);
+  const j = anyActive ? getActive(s, 'lost_joey') : undefined, jd = j?.data;
+  if (j && jd) {
+    if (m === jd.bark) { ctx.emit({ type: 'cast', who: 'biscuit', act: 'bark' }); ctx.emit({ type: 'season/joey', state: 'bark', x: j.x ?? 0, z: j.z ?? 0, ...(jd.spot !== undefined && { spot: jd.spot }) }); ctx.emit({ type: 'sound', name: 'bark' }); }
+    if (m >= (jd.end ?? 0)) {
+      const f = famById(s, jd.fam);
       if (f) f.joey = false;
-      const spot = spotName(j.data.spot || '');
+      const spot = spotName(jd.spot || '');
       ctx.emit({ type: 'toast', text: fill(L.joeyMissed, { spot }), cls: 'event', icon: 'sparkle' });
-      ctx.emit({ type: 'season/joey', state: 'missed', x: j.x, z: j.z });
+      ctx.emit({ type: 'season/joey', state: 'missed', x: j.x ?? 0, z: j.z ?? 0 });
       deactivate(s, 'lost_joey');
       se.farmer.tasks = se.farmer.tasks.filter((t, i) => i === 0 || t.ev !== 'lost_joey');
       ctx.goalLapse('pins', false);              // mom found him herself: no "Done", the toast tells it
@@ -1531,11 +1574,11 @@ function eventsTick(s, ctx) {
   if (se.golden && m >= CAT.golden_hour.to) { se.golden = false; deactivate(s, 'golden_hour'); }
   if (se.puffs.length) se.puffs = se.puffs.filter((p) => p.until > m);
   // the toddler: pose done, or ignored
-  const td = anyActive && getActive(s, 'toddler_giant');
-  if (td) {
-    const f = famById(s, td.data.fam), C = CAT.toddler_giant;
-    const posed = td.data.posing && !se.farmer.tasks.some((t) => t.ev === 'toddler_giant');
-    if (posed || m >= td.data.end) {
+  const td = anyActive ? getActive(s, 'toddler_giant') : undefined, tdd = td?.data;
+  if (td && tdd) {
+    const f = famById(s, tdd.fam), C = CAT.toddler_giant;
+    const posed = tdd.posing && !se.farmer.tasks.some((t) => t.ev === 'toddler_giant');
+    if (posed || m >= (tdd.end ?? 0)) {
       if (f) {
         if (posed) { mod(f, 'toddler', C.sat); s.rep.buzz = round3(clamp((s.rep.buzz || 0) + C.buzz, S.buzz[0], S.buzz[1])); moment(s, 20, L.moments.toddler); ctx.emit({ type: 'toast', text: L.toddlerPose, cls: 'good', icon: 'giant' }); }
         else { mod(f, 'toddler', C.ignore); ctx.emit({ type: 'toast', text: L.toddlerIgnored, cls: 'warn', icon: 'giant' }); }
@@ -1544,8 +1587,8 @@ function eventsTick(s, ctx) {
       deactivate(s, 'toddler_giant');
     }
   }
-  const pr = anyActive && getActive(s, 'proposal');
-  if (pr && m >= pr.data.end) deactivate(s, 'proposal');
+  const pe = anyActive ? getActive(s, 'proposal')?.data?.end : undefined;
+  if (pe !== undefined && m >= pe) deactivate(s, 'proposal');
   // the whale dives; everybody wanders back, glowing
   if (se.whale && m >= se.whale.end) {
     se.whale = null; deactivate(s, 'whale_weekend');
@@ -1557,11 +1600,11 @@ function eventsTick(s, ctx) {
     }
     ctx.emit({ type: 'toast', text: L.whaleBack, cls: 'good', icon: 'whale' });
   }
-  for (const r in se.closed) if (se.closed[r] <= m) delete se.closed[r];
+  for (const r in se.closed) if ((se.closed[r] ?? 0) <= m) delete se.closed[r];
 }
 
 // Bea (hire): a daytime restock trip every 40 ticks when a row is under 30% (never on Sundays: she's at the dam).
-function beaTick(s, ctx) {
+function beaTick(s: State, ctx: Ctx) {
   if (!hired(s, 'bea') || !isSaturday(s.clock.day)) return;
   if (++s.season.bea < T.hires.bea.tripTicks) return;
   s.season.bea = 0;
@@ -1572,7 +1615,7 @@ function beaTick(s, ctx) {
 }
 
 // ------------------------------------------------------------ the day: weekend, weekday, overnight
-function weekendStart(s, ctx) {
+function weekendStart(s: State, ctx: Ctx) {
   const se = s.season, F = se.farmer;
   se.day = freshDay(s);
   Object.assign(se, { families: [], queue: [], cars: [], goat: null, runaway: null, whale: null, golden: false, puffs: [], closed: {}, halUntil: -1, bea: 0,
@@ -1589,14 +1632,14 @@ function weekendStart(s, ctx) {
   planDay(s);
   if (s.clock.year >= S.tiers.fromYear) morningCard(s, ctx);
 }
-function weekendEnd(s, ctx) {
+function weekendEnd(s: State, ctx: Ctx) {
   const se = s.season, day = se.day, tot = se.totals;
   // closing time: whoever is still in the queue is rung up by Gran staying late; browsers check out what they hold
   for (const f of [...se.families]) {
     if (LEAVING.has(f.state) || f.state === 'in') continue;      // on their way home, or still on the way in: no harm done
     if (f.cart.length) serve(s, ctx, f, 'gran'); else { settleWants(s, ctx, f); finish(s, ctx, f); }
   }
-  for (const c of se.road.cars) { day.turned++; tot.turned++; }
+  day.turned += se.road.cars.length; tot.turned += se.road.cars.length;
   se.families = []; se.queue = []; se.road.cars = []; se.road.q = 0; se.cars = [];
   tot.acts.push(day.acts);
   if (day.turned && day.turned >= 0.3 * (day.turned + day.arrived)) { tot.uturnDays++; ctx.story('traffic', 45, {}); moment(s, 24, L.moments.traffic); }
@@ -1610,22 +1653,24 @@ function weekendEnd(s, ctx) {
   eveningCard(s, ctx);
 }
 // Weekdays: Gran minds the stand. A trickle of families is served automatically (0.15 x Base x REP x WX), one toast.
-function weekdaySales(s, ctx) {
+function weekdaySales(s: State, ctx: Ctx) {
   const d = s.clock.day, y = s.clock.year;
   const n = Math.floor(expectedFamilies(s, d) + u01(s.seed, y, d, 'n'));
   let amt = 0;
   const tm = tierMul(s);
   for (let i = 0; i < n; i++) {
     const sp = SPECIES[Math.floor(u01(s.seed, y, d, i, 'sp') * SPECIES.length)];
+    if (!sp) continue;
     const f = newFamily(s, d, i, sp, OPEN, null);
     if (s.weather.f > T.weather.effects.cosyF) mod(f, 'cosy', S.sat.cosy);
     mod(f, 'variety', patch.varietyBonus(s));
     for (const w of openWants(f)) {
       const rs = patch.rowsWithPrime(s, w.v);
-      if (rs.length) buy(s, ctx, f, rs[0], w, w.v);
+      const r0 = rs[0];
+      if (r0 !== undefined) buy(s, ctx, f, r0, w, w.v);
     }
     settleWants(s, ctx, f);
-    for (const c of f.cart) amt += round2((c.tr ? VT.classic.price : VT[c.v].price) * (c.soft ? T.patch.aging.softPrice : 1) * tm);
+    for (const c of f.cart) amt += round2((c.tr ? VT.classic.price : vt(c.v).price) * (c.soft ? T.patch.aging.softPrice : 1) * tm);
     if (f.cart.length && next(f.rng) < T.patch.hives.honeyBuy && patch.honeyTake(s, 1)) amt += S.honeyPrice;
     const stars = clamp(Math.round(clamp(f.sat, 0, 100) / S.stars.div), S.stars.min, S.stars.max);
     s.rep.R = round3(clamp(s.rep.R + S.R.k * S.R.weekdayWeight * (stars - s.rep.R), 1, 5));
@@ -1640,7 +1685,7 @@ function weekdaySales(s, ctx) {
   ctx.emit({ type: 'toast', text, cls: '', icon: 'stand', key: 'weekday' });   // one pill the week's days rewrite in place
 }
 // Overnight: 20 fruit (40 with Bea) from the barn into rows under 50% fullness, front rows first, matching variety.
-function overnightRestock(s, ctx) {
+function overnightRestock(s: State, _ctx: Ctx) {
   let left = hired(s, 'bea') ? S.overnight.bea : S.overnight.n;
   let moved = 0;
   s.patch.rows.forEach((row, r) => {
@@ -1652,39 +1697,40 @@ function overnightRestock(s, ctx) {
 }
 
 // ------------------------------------------------------------ morning and evening cards
-function morningCard(s, ctx) {
+function morningCard(s: State, ctx: Ctx) {
   const d = s.clock.day, fc = s.weather;
-  ctx.card('morning', {
+  ctx.card({ kind: 'morning', data: {
     title: fill(L.morning.title, { day: dowName(d, true) }), day: d, f: fc.f, heat: fc.heat, rain: fc.rain,
     expect: Math.round(expectedFamilies(s, d)), first: s.clock.year === S.tiers.fromYear && weekendIndex(d) === 0 && isSaturday(d),
     choices: [{ id: 'open', label: L.morning.open, primary: true }], defaultChoice: 'open',
-  });
+    } });
 }
-function eveningCard(s, ctx) {
+function eveningCard(s: State, ctx: Ctx) {
   const d = s.clock.day, day = s.season.day, fc = s.weather.forecast?.[0];
   const stock = s.patch.rows.reduce((a, r) => ({ prime: a.prime + r.stock.prime, green: a.green + r.stock.green, soft: a.soft + r.stock.soft }), { prime: 0, green: 0, soft: 0 });
-  ctx.card('evening', {
+  ctx.card({ kind: 'evening', data: {
     title: fill(L.evening.title, { day: `${dowName(d, true)}, ${label(d)}` }), day: d,
     served: day.served, turned: day.turned, walkoffs: day.walkoffs, arrived: day.arrived, rev: day.rev, byV: { ...day.byV }, tips: day.tips,
     stars: day.starsN ? round2(day.starsSum / day.starsN) : null, R: round2(s.rep.R), byYou: day.byYou, maxRush: day.maxRush,
     best: day.best?.text || null, stock: { ...stock, barn: patch.barnStock(s, null, { soft: true }) },
     tomorrow: d >= EVE ? null : fc ? { day: fc.day, f: fc.f, heat: fc.heat, rain: fc.rain } : null, weighoff: d >= EVE,
     choices: [{ id: 'ok', label: L.evening.ok, primary: true }], defaultChoice: 'ok',
-  });
+    } });
 }
 
 // ------------------------------------------------------------ Panic Night (Y3+, Fri Oct 30): everything sells
 /** Run Halloween Panic Night (once a year from year 3): 0.5 x Base families who take anything, soft too, at full price. */
-export function panicNight(s, ctx) {
+export function panicNight(s: State, ctx: Ctx) {
   const PN = T.calendar.panicNight;
   if (s.clock.year < PN.fromYear || s.season.panic?.y === s.clock.year) return null;
   const n = Math.round(S.panic * baseY(s)), r = makeRng(hash32(s.seed, s.clock.year, 'panic'));
   let sold = 0, amt = 0;
-  const grab = (large) => {
+  const grab = (large: boolean) => {
     for (const soft of [false, true]) for (let i = 0; i < s.patch.rows.length; i++) {
       const row = s.patch.rows[i];
+      if (!row) continue;
       for (const [v, b] of Object.entries(row.by)) {
-        if (VT[v].large !== large || !(soft ? b.soft : b.prime)) continue;
+        if (vt(v).large !== large || !(soft ? b.soft : b.prime)) continue;
         if (patch.take(s, i, v, 1, { soft })) return v;
       }
     }
@@ -1693,32 +1739,33 @@ export function panicNight(s, ctx) {
   };
   for (let i = 0; i < n; i++) {
     const wants = [true, ...(next(r) < 0.3 ? [true] : []), ...(next(r) < 0.7 ? [false] : []), ...(next(r) < 0.7 ? [false] : [])];
-    for (const large of wants) { const v = grab(large); if (v) { sold++; amt += VT[v].price; } }
+    for (const large of wants) { const v = grab(large); if (v) { sold++; amt += vt(v).price; } }
   }
   amt = round2(amt);
   if (amt) ctx.money(amt, 'pumpkins');
   s.season.panic = { y: s.clock.year, n, sold, amt };
   s.season.totals.revenue = round2(s.season.totals.revenue + amt);
   const P = L.panic;
-  ctx.card('panic', { speaker: 'gran', eyebrow: P.eyebrow, title: P.title, text: fill(sold ? P.text : P.none, { n, sold, amt: `$${Math.round(amt)}` }), n, sold, amt,
-    choices: [{ id: 'ok', label: P.ok, primary: true }], defaultChoice: 'ok' });
+  ctx.card({ kind: 'panic', data: { speaker: 'gran', eyebrow: P.eyebrow, title: P.title, text: fill(sold ? P.text : P.none, { n, sold, amt: `$${Math.round(amt)}` }), n, sold, amt,
+    choices: [{ id: 'ok', label: P.ok, primary: true }], defaultChoice: 'ok' } });
   ctx.emit({ type: 'season/panic', n, sold, amt });
   ctx.story('panic', 32, { n, sold });
   return s.season.panic;
 }
 
 // ------------------------------------------------------------ actions (the UI's verbs; bots use the same ones)
-const weekendAct = (s) => (weekendNow(s) ? null : fail('the stand is only busy on weekends'));
-function counted(s, r) {
+const weekendAct = (s: State) => (weekendNow(s) ? null : fail('the stand is only busy on weekends'));
+function counted(s: State, r: ActionResult) {
   if (r.ok) { s.season.day.acts++; s.season.acts.push(s.clock.minute); if (s.season.acts.length > 24) s.season.acts.shift(); }
   return r;
 }
 const ACTIONS = {
   // RING UP: serve the front family at once (taps buffer up to 2 while they walk up). Rush within 12 ticks.
-  'season/ringUp': (s, a, ctx) => {
+  'season/ringUp': (s, _a, ctx) => {
     const no = weekendAct(s); if (no) return no;
     if (!atStand(s)) return fail('get back to the stand first');
-    if (queueReady(s)) { const f = frontFamily(s); serve(s, ctx, f, 'you'); return counted(s, { ok: true, served: f.id, rush: s.season.you.rush }); }
+    const front = frontFamily(s);
+    if (front && queueReady(s)) { serve(s, ctx, front, 'you'); return counted(s, { ok: true, served: front.id, rush: s.season.you.rush }); }
     if (!s.season.queue.length) return fail('nobody in line yet');
     if (s.season.you.buffer >= S.you.buffer) return fail('they are on their way');
     s.season.you.buffer++;
@@ -1728,8 +1775,8 @@ const ACTIONS = {
   'season/go': (s, a, ctx) => {
     const no = weekendAct(s); if (no) return no;
     const to = a.to;
-    if (!FARMER_SPOTS[to] && to !== 'row') return fail('nowhere to go');
-    if (to === 'row' && !s.patch.rows[a.row]) return fail('no such row');
+    if (!own(FARMER_SPOTS, to) && to !== 'row') return fail('nowhere to go');
+    if (to === 'row' && (a.row === undefined || !s.patch.rows[a.row])) return fail('no such row');
     if (s.season.farmer.at === to && to !== 'row' && !s.season.farmer.tasks.length) return { ok: true, already: true };
     if (to === 'lot' && !(s.unlocks.route46 || s.clock.year > 1)) return fail('Hal will tell you about the lot');
     addTask(s, ctx, { k: 'go', to, row: a.row });
@@ -1759,11 +1806,12 @@ const ACTIONS = {
     if (a.choice === 'look') { if (!f.bubble.looked) { f.bubble.looked = true; f.bubble.t += S.bubbleHold; } return { ok: true }; }
     if (answering(s, f)) return fail('your farmer is already on it');
     const w = openWants(f)[0];
+    if (!w) return fail('they have moved on');
     if (a.choice === 'fetch') {
       if (!patch.barnStock(s, w.v)) return fail(`no ${vname(w.v)} in the barn`);
       if (!addTask(s, ctx, { k: 'fetch', fam: f.id, want: w.v })) return fail('your farmer has their paws full');
     } else {
-      if (!VT[a.choice] || !patch.rowsWithPrime(s, a.choice).length) return fail('none of those in the field');
+      if (!own(VT, a.choice) || !patch.rowsWithPrime(s, a.choice).length) return fail('none of those in the field');
       if (!addTask(s, ctx, { k: 'try', fam: f.id, v: a.choice, want: w.v })) return fail('your farmer has their paws full');
     }
     f.bubble.held = S.answerWait;
@@ -1810,7 +1858,7 @@ const ACTIONS = {
     return counted(s, { ok: true });
   },
   // The morning card's price board, shuttle and radio spot (Y2+). Charged when the gate opens.
-  'season/plan': (s, a, ctx) => {
+  'season/plan': (s, a) => {
     if (s.clock.phase !== 'october' || s.clock.year < S.tiers.fromYear) return fail('the price board arrives in year 2');
     if (a.tier != null) { if (!TIERS.includes(a.tier)) return fail('no such price'); s.season.tier = a.tier; }
     if (a.shuttle != null) s.season.shuttlePlan = !!a.shuttle;
@@ -1819,26 +1867,26 @@ const ACTIONS = {
   },
   // The lighthouse foghorn three times in five seconds: the coyote pups howl back, the harbor seals bark back and the
   // skunks startle.
-  'season/foghorn': (s, a, ctx) => {
+  'season/foghorn': (s, _a, ctx) => {
     if (!weekendNow(s)) return { ok: true };
-    for (const f of onSite(s)) if (f.species === 'coyote') mod(f, 'cosy', SP.coyote.howlSat);
-    for (const f of onSite(s)) if (f.species === 'seal') mod(f, 'cosy', SP.seal.barkSat);
+    for (const f of onSite(s)) if (f.species === 'coyote') mod(f, 'cosy', SP.coyote.howlSat ?? 0);
+    for (const f of onSite(s)) if (f.species === 'seal') mod(f, 'cosy', SP.seal.barkSat ?? 0);
     const howl = onSite(s).some((f) => f.species === 'coyote'), bark = onSite(s).some((f) => f.species === 'seal');
     if (howl || bark) ctx.emit({ type: 'toast', text: howl && bark ? L.foghornBoth : howl ? L.foghornHowl : L.foghornBark, cls: 'event', icon: 'sound' });
     const sk = onSite(s).find((f) => f.species === 'skunk');
     if (sk) startle(s, ctx, sk.x, sk.z);
     return { ok: true };
   },
-  'season/panic': (s, a, ctx) => { const r = panicNight(s, ctx); return r ? { ok: true, ...r } : fail('no panic tonight'); },
-};
+  'season/panic': (s, _a, ctx) => { const r = panicNight(s, ctx); return r ? { ok: true, ...r } : fail('no panic tonight'); },
+} satisfies ActionHandlers;
 
 // ------------------------------------------------------------ onboarding beats (design §3, year 1: one verb a day)
 const standGlide = { x: -5, z: -5.6, zoom: 1.5 };
-const BEATS = [
+const BEATS: Beat[] = [
   { // #17 RING UP (W1 Sat): the Mayor opens the gate, Gran explains the till
     id: 'season.ringUp', year: 1, order: 18, at: Y1.ringUp,
-    when: (s) => weekendNow(s) && s.clock.day >= D(Y1.ringUp),
-    run(s, ctx) {
+    when: (s: State) => weekendNow(s) && s.clock.day >= D(Y1.ringUp),
+    run(_s, ctx) {
       ctx.unlock('ringup');
       ctx.say('mayor', [L.gate], { glide: standGlide });
       ctx.say('gran', [LINES.gran.ringUp, L.ringUp2], { goal: { id: 'ringUp', target: { kind: 'fab', id: 'ringup' } } });
@@ -1846,20 +1894,20 @@ const BEATS = [
   },
   { // #18 your farmer runs; want bubbles (W1 Sun): the fox who wants a white one
     id: 'season.wants', year: 1, order: 19, at: Y1.wants,
-    when: (s) => weekendNow(s) && s.clock.day >= D(Y1.wants)
+    when: (s: State) => weekendNow(s) && s.clock.day >= D(Y1.wants)
       && (s.season.families.some((f) => f.bubble?.kind === 'want') || s.clock.minute >= 600),
-    run(s, ctx) {
+    run(s: State, ctx: Ctx) {
       ctx.unlock('wants');
       const f = s.season.families.find((x) => x.script === 'fox' && x.bubble) || s.season.families.find((x) => x.bubble?.kind === 'want');
-      if (f) f.bubble.t = Math.max(f.bubble.t, S.answerWait);       // the lesson's bubble waits for you
+      if (f?.bubble) f.bubble.t = Math.max(f.bubble.t, S.answerWait);       // the lesson's bubble waits for you
       ctx.say('gran', [LINES.gran.wants, L.wants2], { goal: { id: 'wants', target: { kind: 'pin', id: 'want-0' } },
         glide: f ? { x: f.x, z: f.z, zoom: 1.3 } : undefined });
     },
   },
   { // #19 restock (W2 Sat). If the barn is empty Gran stocks 12 "from her own little patch" so the lesson always works.
     id: 'season.restock', year: 1, order: 20, at: Y1.restock,
-    when: (s) => weekendNow(s) && s.clock.day >= D(Y1.restock),
-    run(s, ctx) {
+    when: (s: State) => weekendNow(s) && s.clock.day >= D(Y1.restock),
+    run(s: State, ctx: Ctx) {
       ctx.unlock('restock');
       const lines = [LINES.gran.restock, L.restock2];
       if (!patch.barnStock(s)) {
@@ -1875,8 +1923,8 @@ const BEATS = [
   },
   { // #20 wagons and strays (W2 Sun, Dez's cameo): three wagons are already out in row 4
     id: 'season.wagons', year: 1, order: 21, at: Y1.wagons,
-    when: (s) => weekendNow(s) && s.clock.day >= D(Y1.wagons),
-    run(s, ctx) {
+    when: (s: State) => weekendNow(s) && s.clock.day >= D(Y1.wagons),
+    run(s: State, ctx: Ctx) {
       ctx.unlock('wagons');
       const W = s.season.wagons, r = S.scripted.wagonRow;
       for (let i = 0; i < S.scripted.wagons && W.free > 0; i++) { W.free--; W.strays.push({ id: `lesson${i}`, x: -6 + i * 4.5, z: aisleZ(r) + 0.35, lesson: true }); }
@@ -1885,19 +1933,20 @@ const BEATS = [
   },
   { // #21 the Route 46 meter and the levers (W3 Sat, the scripted heat wave): Hal
     id: 'season.route46', year: 1, order: 22, at: Y1.route46,
-    when: (s) => weekendNow(s) && s.clock.day >= D(Y1.route46),
-    run(s, ctx) {
+    when: (s: State) => weekendNow(s) && s.clock.day >= D(Y1.route46),
+    run(_s, ctx) {
       ctx.unlock('route46');
       ctx.say('hal', [LINES.hal.route46, L.route46b], { goal: { id: 'route46', target: { kind: 'station', id: 'lot' } }, glide: { x: -15, z: -4.6, zoom: 1.1 } });
     },
   },
   { // #22 event pins (W3 Sun, a scripted lost joey): a possum mom ("PIP!") with Biscuit barking
     id: 'season.pins', year: 1, order: 23, at: Y1.pins,
-    when: (s) => weekendNow(s) && s.clock.day >= D(Y1.pins)
+    when: (s: State) => weekendNow(s) && s.clock.day >= D(Y1.pins)
       && s.season.families.some((f) => f.script === 'possum' && ['walk', 'pick', 'want'].includes(f.state) && s.clock.minute >= f.arr + S.scripted.joeyAfter),
-    run(s, ctx) {
+    run(s: State, ctx: Ctx) {
       ctx.unlock('pins');
       const f = s.season.families.find((x) => x.script === 'possum');
+      if (!f) return;
       fireNow(s, ctx, 'lost_joey', { fam: f.id, spot: 'hayfort', ticks: CAT.lost_joey.lessonTicks });
       ctx.markIntro();
       ctx.say('possumMom', [LINES.possumMom.lostJoey, L.joey2], { goal: { id: 'pins', target: { kind: 'pin', id: 'lost_joey' } },
@@ -1906,13 +1955,13 @@ const BEATS = [
   },
   { // Y2: Hal announces the morning card the Friday before (the card itself would hide him)
     id: 'season.y2morning', year: 2, order: 40,
-    when: (s) => s.clock.phase === 'october' && s.clock.day >= D('Oct 2'),
-    run(s, ctx) { ctx.say('hal', [L.y2morning]); },
+    when: (s: State) => s.clock.phase === 'october' && s.clock.day >= D('Oct 2'),
+    run(_s, ctx) { ctx.say('hal', [L.y2morning]); },
   },
   { // Y2: Perfect Seekers and Old-Timers (Gran), a week later
     id: 'season.y2types', year: 2, order: 41,
-    when: (s) => weekendNow(s) && s.clock.day >= D('Oct 10'),
-    run(s, ctx) { ctx.say('gran', [L.y2types]); },
+    when: (s: State) => weekendNow(s) && s.clock.day >= D('Oct 10'),
+    run(_s, ctx) { ctx.say('gran', [L.y2types]); },
   },
 ];
 
@@ -1920,26 +1969,30 @@ const BEATS = [
 // attentive: instant and unlimited; realistic (the balanced bot): 1.5-4 s to react, <= 25 actions/min; novice: rings up
 // at half pace and answers 40% of bubbles late; lazy (idle): never taps on weekends. Decisions are keyed noise, never a
 // stream, and timings come from state, so a saved game replays exactly.
-const modeOf = (P) => P.season || (P.name === 'novice' ? 'novice' : P.name === 'idle' ? 'lazy' : 'realistic');
+const modeOf = (P: Policy) => P.season || (P.name === 'novice' ? 'novice' : P.name === 'idle' ? 'lazy' : 'realistic');
 // keyed reaction time: has the player noticed something that started at `since`?
 const REACT = { novice: S.bot.novice.react.map(sec), realistic: S.bot.realistic.react.map(sec) };
-function reacted(s, mode, id, since) {
+function reacted(s: State, mode: string, id: string, since: number) {
   if (mode === 'attentive') return true;
-  const [a, b] = mode === 'novice' ? REACT.novice : REACT.realistic;
+  const [a = 0, b = 0] = mode === 'novice' ? REACT.novice : REACT.realistic;
   return s.clock.minute - since >= a + u01(s.seed, s.clock.year, s.clock.day, id, 'react') * (b - a);
 }
-function hasTask(F, k) { for (const t of F.tasks) if (t.k === k) return true; return false; }
-function hasTaskEv(F, ev) { for (const t of F.tasks) if (t.ev === ev) return true; return false; }
-function goingToStand(F) { for (const t of F.tasks) if (t.k === 'go' && t.to === 'stand') return true; return false; }
-function busyHands(s, mode) {                                       // the realistic player's <= 25 actions a minute
+function hasTask(F: SeasonFarmer, k: string) { for (const t of F.tasks) if (t.k === k) return true; return false; }
+function hasTaskEv(F: SeasonFarmer, ev: string) { for (const t of F.tasks) if (t.ev === ev) return true; return false; }
+function goingToStand(F: SeasonFarmer) { for (const t of F.tasks) if (t.k === 'go' && t.to === 'stand') return true; return false; }
+function busyHands(s: State, mode: string) {                                       // the realistic player's <= 25 actions a minute
   if (mode !== 'realistic') return false;
   const se = s.season, m = s.clock.minute, B = S.bot.realistic, win = sec(B.window);
   let recent = 0;
-  for (let i = se.acts.length - 1; i >= 0 && m - se.acts[i] < win; i--) if (se.acts[i] <= m) recent++;
+  for (let i = se.acts.length - 1; i >= 0; i--) {
+    const t = se.acts[i] ?? 0;
+    if (m - t >= win) break;
+    if (t <= m) recent++;
+  }
   return recent >= B.perWindow;
 }
 // 1. the line comes first: ring up, or hurry back when it builds
-function botLine(s, mode) {
+function botLine(s: State, mode: string): Action | null {
   const se = s.season, F = se.farmer, m = s.clock.minute, B = S.bot, Q = se.queue.length, front = frontFamily(s);
   if (front && atStand(s) && queueReady(s)) {
     if (mode === 'attentive' && (Q >= 2 || front.wait >= B.attentive.serveWait)) return RING_UP;
@@ -1952,7 +2005,7 @@ function botLine(s, mode) {
   return null;
 }
 // 3. a [?] bubble: fetch it from the barn, else suggest something that's in the field
-function botBubble(s, mode) {
+function botBubble(s: State, mode: string): Action | null {
   const se = s.season;
   for (const f of se.families) {
     if (f.state !== 'want' || f.bubble?.kind !== 'want' || answering(s, f)) continue;
@@ -1960,12 +2013,12 @@ function botBubble(s, mode) {
     if (!reacted(s, mode, `b${f.id}`, f.bubble.t0)) continue;
     const w = openWants(f)[0];
     if (w && patch.barnStock(s, w.v)) return { type: 'season/answer', id: f.id, choice: 'fetch' };
-    for (const v of BOT_SUBS) if ((w?.kid ? v === 'mini' || v === 'warty' || v === 'white' : VT[v].large) && patch.rowsWithPrime(s, v).length) return { type: 'season/answer', id: f.id, choice: v };
+    for (const v of BOT_SUBS) if ((w?.kid ? v === 'mini' || v === 'warty' || v === 'white' : vt(v).large) && patch.rowsWithPrime(s, v).length) return { type: 'season/answer', id: f.id, choice: v };
   }
   return null;
 }
 // 4. traffic: open the beach when the road backs up (Gran too when it's bad; she comes back when it clears)
-function botTraffic(s, mode) {
+function botTraffic(s: State, mode: string): Action | null {
   const se = s.season, B = S.bot, Q = se.queue.length;
   if (hasTask(se.farmer, 'lever')) return null;
   if (!se.parking.beachOpen && (se.road.q >= B.roadAt || (s.weather.heat && se.parking.used >= se.parking.cap - 2)) && reacted(s, mode, 'beach', s.clock.minute - se.road.q * 4)) return { type: 'season/lever', id: 'beach', on: true };
@@ -1975,16 +2028,16 @@ function botTraffic(s, mode) {
   return null;
 }
 // the realistic player's restock slot for the day, keyed noise kept for the day: it was a hash every minute
-const RS = { seed: null, y: 0, d: -1, slot: 0 };
+const RS: { seed: number | null; y: number; d: number; slot: number } = { seed: null, y: 0, d: -1, slot: 0 };
 const LOOK = Math.max(1, Math.round(TPS / 2));                       // a person looks up twice a second (bots.js tickStep)
 const ROWS_A = sec(S.bot.attentive.rows), ROWS_R = Math.max(1, Math.round(sec(S.bot.realistic.rows) / LOOK));
-function restockSlot(s) {
+function restockSlot(s: State) {
   const y = s.clock.year, d = s.clock.day;
   if (RS.seed !== s.seed || RS.y !== y || RS.d !== d) Object.assign(RS, { seed: s.seed, y, d, slot: Math.floor(u01(s.seed, y, d, 'rs') * ROWS_R) });
   return RS.slot;
 }
 // 6.-8. the errands: Pamela, a thin front row, strays, events worth a trip
-function botErrands(s, mode) {
+function botErrands(s: State, mode: string): Action | null {
   const se = s.season, F = se.farmer, m = s.clock.minute, B = S.bot;
   if (se.goat && !hasTaskEv(F, 'goat') && reacted(s, mode, 'goat', m - se.goat.t)) return { type: 'season/chase', id: 'goat' };
   // restock: the attentive player checks the rows every second, the realistic one every ~3 s (a keyed slot as wide as
@@ -2004,17 +2057,17 @@ function botErrands(s, mode) {
 const RING_UP = Object.freeze({ type: 'season/ringUp' });
 const BOT_SUBS = [...LARGE, 'mini'];
 const BOT_TRIPS = ['toddler_giant', 'proposal', 'dez_wanders'];
-function botAct(s, P) {
+function botAct(s: State, P: Policy): Action | null {
   const mode = modeOf(P), staff = !!P.delegate && hired(s, 'dez');   // the Operator leaves the till to Dez and works the floor
   if (mode === 'lazy' || !weekendNow(s)) return null;
   if (busyHands(s, mode)) return null;
   const se = s.season, F = se.farmer, m = s.clock.minute;
   const free = F.tasks.length < 2, line = !staff && se.queue.length >= 2;      // stay put when folks are waiting
-  let a = staff ? null : botLine(s, mode);
+  let a: Action | null = staff ? null : botLine(s, mode);
   if (a) return a === RING_UP ? { type: 'season/ringUp' } : a;
   // 2. a lost joey
   const j = s.events.active.length ? getActive(s, 'lost_joey') : null;
-  if (j && mode !== 'novice' && free && !hasTaskEv(F, 'lost_joey') && reacted(s, mode, 'joey', j.data.bark - sec(3))) return { type: 'season/chase', id: 'lost_joey' };
+  if (j && mode !== 'novice' && free && !hasTaskEv(F, 'lost_joey') && reacted(s, mode, 'joey', (j.data?.bark ?? 0) - sec(3))) return { type: 'season/chase', id: 'lost_joey' };
   if ((s.unlocks.wants || s.clock.year > 1) && !line && free && se.census.want && (a = botBubble(s, mode))) return a;
   if (mode === 'novice') return !F.tasks.length && F.at !== 'stand' && reacted(s, mode, 'back', F.since ?? m) ? { type: 'season/go', to: 'stand' } : null;
   if ((s.unlocks.route46 || s.clock.year > 1) && free && P.levers !== false && (a = botTraffic(s, mode))) return a;   // levers: false = never touch them
@@ -2025,7 +2078,7 @@ function botAct(s, P) {
   return null;
 }
 // Plans for tomorrow's morning card (Y2+): Fair prices; the shuttle and radio when Hal calls heat or a big weekend.
-function botPlan(s, P) {
+function botPlan(s: State, P: Policy): Action | null {
   // the morning card is a plan made before the gate opens, not weekend attention: the lazy player books what the realistic
   // one does (so the attention comparison measures the day itself); the novice never opens the price board, idle never acts
   if (s.clock.year < S.tiers.fromYear || P.name === 'idle' || modeOf(P) === 'novice') return null;
@@ -2040,29 +2093,38 @@ function botPlan(s, P) {
 
 // One weekend minute, in order. Called through a table so each part is compiled on its own (a rare branch in one of
 // them never forces the whole minute to be recompiled).
-function arrivals(s, ctx) {
+function arrivals(s: State, ctx: Ctx) {
   const day = s.season.day, m = s.clock.minute;
-  while (day.ptr < day.sched.length && day.sched[day.ptr][0] <= m && m < GATE_CLOSE) arrive(s, ctx, day.sched[day.ptr++]);
+  while (day.ptr < day.sched.length && m < GATE_CLOSE) {
+    const e = day.sched[day.ptr];
+    if (!e || e[0] > m) break;
+    day.ptr++;
+    arrive(s, ctx, e);
+  }
 }
-function familiesTick(s, ctx) {
+function familiesTick(s: State, ctx: Ctx) {
   const fs = s.season.families;
-  for (let i = fs.length - 1; i >= 0; i--) if (fs[i]) { fs[i].kerb = s.season.cars.length > 0 && atKerb(s, fs[i]); famTick(s, ctx, fs[i]); }
+  for (let i = fs.length - 1; i >= 0; i--) {
+    const f = fs[i];
+    if (f) { f.kerb = s.season.cars.length > 0 && atKerb(s, f); famTick(s, ctx, f); }
+  }
 }
 // Folks wait at the kerb for a gap: someone about to step onto the road waits while a car is coming (and cars stop for
 // anyone already on it). Your farmer never waits: the cars stop for you.
-function atKerb(s, f) {
+function atKerb(s: State, f: Family) {
   if (f.z > traffic.BAND0 && f.z < traffic.BAND1) return false;                 // already on the road: keep going
   const p = f.path[f.pi];
   if (!p) return false;
+  const px = p[0] ?? f.x, pz = p[1] ?? f.z;
   const below = f.z <= traffic.BAND0, edge = below ? traffic.BAND0 : traffic.BAND1;
-  if ((p[1] <= traffic.BAND0) === below && (p[1] >= traffic.BAND1) === !below) return false;   // not stepping onto it
+  if ((pz <= traffic.BAND0) === below && (pz >= traffic.BAND1) === !below) return false;   // not stepping onto it
   if (Math.abs(f.z - edge) > 0.55) return false;                                 // not at the kerb yet
-  const x = p[1] === f.z ? f.x : f.x + (p[0] - f.x) * ((edge - f.z) / (p[1] - f.z));
+  const x = pz === f.z ? f.x : f.x + (px - f.x) * ((edge - f.z) / (pz - f.z));
   return traffic.coming(s.season, x);
 }
 // a census for the director's checks (and the concurrency histogram: families on foot that the phone draws, not those
 // in cars or lost in the corn maze)
-function census(s) {
+function census(s: State) {
   const se = s.season;
   let on = 0, gawk = 0, possums = 0, want = 0, maze = 0;
   for (const f of se.families) {
@@ -2076,27 +2138,22 @@ function census(s) {
   const cs = se.census; cs.on = on + maze; cs.gawk = gawk; cs.possums = possums; cs.want = want;
   const c = se.totals.conc;
   while (c.length <= on) c.push(0);
-  c[on]++;
+  c[on] = (c[on] ?? 0) + 1;
 }
-const TICK_PARTS = [arrivals, roadTick, carsTick, familiesTick, checkoutTick, farmerTick, eventsTick, beaTick, census];
+const TICK_PARTS: ((s: State, ctx: Ctx) => void)[] = [arrivals, roadTick, carsTick, familiesTick, checkoutTick, farmerTick, eventsTick, beaTick, census];
 
 // Every catalogue entry gets the same fields in the same order (absent ones undefined): the director and runBeats walk
 // them every weekend minute, and one object shape keeps those loops fast.
 const EVENT_KEYS = ['id', 'cls', 'per', 'urgent', 'quiet', 'cooldownDays', 'cooldownTicks', 'capYear', 'capSeason', 'when', 'rate', 'fire', 'text', 'tap'];
 const BEAT_KEYS = ['id', 'year', 'years', 'order', 'gap', 'urgent', 'when', 'run'];
-const shaped = (keys) => (e) => {
-  const o = {};
-  for (const k of keys) o[k] = e[k];
-  for (const k of Object.keys(e)) if (!keys.includes(k)) o[k] = e[k];
-  return o;
-};
+const shaped = <T extends object>(keys: readonly string[]) => (e: T): T => Object.assign({}, Object.fromEntries(keys.map((k) => [k, undefined])), e);
 
 // ------------------------------------------------------------ the module
 export default {
   id: 'season',
-  init(s) { s.season = freshSeason(s); },
+  init(s: State) { s.season = freshSeason(s); },
   // Reputation carries over between years (§7): R' = 3 + 0.75 (R - 3).
-  newYear(s) {
+  newYear(s: State) {
     const R = S.R;
     s.rep.R = round3(R.carryMid + R.carry * (s.rep.R - R.carryMid));
     s.rep.buzz = 0;
@@ -2104,12 +2161,12 @@ export default {
     s.season = freshSeason(s);
     s.season.tier = tier;
   },
-  phase(s, ctx, from, to) {
+  phase(s: State, ctx, _from, to) {
     if (to === 'october') { s.season.totals = freshTotals(s); s.season.totals.rStart = round3(s.rep.R); }
     if (to === 'halloween') panicNight(s, ctx);
     if (to === 'weighoff') { s.season.families = []; s.season.queue = []; s.season.road.cars = []; s.season.road.q = 0; }
   },
-  dayStart(s, ctx) {
+  dayStart(s: State, ctx: Ctx) {
     if (s.clock.phase !== 'october' || s.season.offstage) return;
     const d = s.clock.day, dec = s.season.decorator;
     if (isWeekend(d)) weekendStart(s, ctx);
@@ -2121,7 +2178,7 @@ export default {
     if (dec?.state === 'open' && !isWeekend(d)) {
       if (patch.barnStock(s, dec.v) >= dec.n) {
         patch.barnTake(s, dec.v, dec.n);
-        const amt = round2(dec.n * VT[dec.v].price * dec.mul);
+        const amt = round2(dec.n * vt(dec.v).price * dec.mul);
         ctx.money(amt, 'pumpkins');
         dec.state = 'done';
         ctx.emit({ type: 'toast', text: fill(L.decoratorDone, { Variety: vname(dec.v), amt: `$${Math.round(amt)}` }), cls: 'good', icon: 'coin' });
@@ -2133,11 +2190,11 @@ export default {
       }
     }
   },
-  tick(s, ctx) {
+  tick(s: State, ctx) {
     if (!weekendNow(s) || s.season.offstage) return;
-    for (let i = 0; i < TICK_PARTS.length; i++) TICK_PARTS[i](s, ctx);
+    for (const part of TICK_PARTS) part(s, ctx);
   },
-  dayEnd(s, ctx) {
+  dayEnd(s: State, ctx) {
     if (s.clock.phase !== 'october' || s.season.offstage) return;
     if (isWeekend(s.clock.day)) weekendEnd(s, ctx);
     // Gran's overnight restock readies the store for a selling day (Friday and Saturday nights). On other nights the
@@ -2146,40 +2203,42 @@ export default {
   },
   actions: ACTIONS,
   cards: {
-    morning(s, card, choice, ctx) {
+    morning(s, _card, _choice, ctx) {
       const se = s.season, d = s.clock.day, wi = weekendIndex(d);
       if (se.radioPlan && se.radioW !== wi) { if (spend(s, ctx, T.shop.radio.price, 'marketing')) { se.radioW = wi; ctx.emit({ type: 'toast', text: L.radio, cls: 'good', icon: 'radio' }); } }
       se.shuttleOn = !!se.shuttlePlan && spend(s, ctx, T.shop.shuttle.price, 'marketing');
       if (se.shuttleOn) ctx.emit({ type: 'toast', text: L.shuttle, cls: 'good', icon: 'lot' });
       // the radio brings more families today: re-plan the crowd with the weekend's marketing in place
       planDay(s);
+      return undefined;
     },
-    evening() {},
-    panic() {},
+    evening() { return undefined; },
+    panic() { return undefined; },
     decorator(s, card, choice) {
-      if (choice !== 'yes') return;
+      if (choice !== 'yes') return undefined;
       s.season.decorator = { v: card.data.variety, n: CAT.decorator_order.n, due: CAT.decorator_order.due, mul: CAT.decorator_order.mul, state: 'open' };
+      return undefined;
     },
   },
-  beats: BEATS.map(shaped(BEAT_KEYS)),
-  events: EVENTS.map(shaped(EVENT_KEYS)),
+  beats: BEATS.map(shaped<Beat>(BEAT_KEYS)),
+  events: EVENTS.map(shaped<DirectorEvent>(EVENT_KEYS)),
   // a lesson's goal lets go when its moment has passed (story.js): no [?] left to answer
   goals: { wants: (s) => !weekendNow(s) || s.season.families.some((f) => f.bubble?.kind === 'want') },
-  bot(s, ctx, P) {
-    if (s.clock.phase !== 'october') return;
+  bot(s: State, _ctx, P) {
+    if (s.clock.phase !== 'october') return null;
     if (!weekendNow(s)) return botPlan(s, P);
     return botAct(s, P);
   },
   summary: (s) => seasonSummary(s),
-};
+} satisfies SimModule;
 
 // a weekend day in real minutes at 1x (actions per minute are per real minute, as a player feels them)
 const DAY_MINUTES_1X = (CLOSE - OPEN) / TPS / 60;
 /** This year's season in numbers (tools/simulate.mjs, the winter ledger, balance tests). */
-export function seasonSummary(s) {
+export function seasonSummary(s: State) {
   const t = s.season.totals, c = t.conc, n = sum(c);
   let acc = 0, p95 = 0;
-  for (let i = 0; i < c.length; i++) { acc += c[i]; if (acc >= 0.95 * n) { p95 = i; break; } }
+  for (let i = 0; i < c.length; i++) { acc += c[i] ?? 0; if (acc >= 0.95 * n) { p95 = i; break; } }
   return { families: t.families, served: t.served, turned: t.turned, walkoffs: t.walkoffs, revenue: t.revenue, weekday: t.weekday.amt,
     stars: t.starsN ? round2(t.starsSum / t.starsN) : null, R: round2(s.rep.R), conc95: p95, concMax: c.length - 1, bind: { ...t.bind },
     actsPerMin: t.acts.length ? round2(sum(t.acts) / t.acts.length / DAY_MINUTES_1X) : 0, actsPerDay: t.acts.length ? round2(sum(t.acts) / t.acts.length) : 0, goatAte: t.goatAte, tips: t.tips, honey: t.honey,

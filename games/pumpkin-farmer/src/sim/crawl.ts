@@ -24,60 +24,71 @@ import { hash32, fill, clamp } from './util.js';
 import { line } from './story.js';
 import { CL } from './lines-giant.js';
 import { tape, takeTape, hasFruit, alive, knockPitch, commas, pace, GLIDE } from './giant.js';
+import type { Card, Policy, SimModule, State, Ctx } from './types.js';
+import type { CrawlGuesse, CrawlPick, Giant } from './state.js';
 
 const TC = T.crawl, D = dayOf;
-const fail = (reason) => ({ ok: false, reason });
+const fail = (reason: string) => ({ ok: false, reason });
 
 // ------------------------------------------------------------ the guesses (keyed: never the rivals stream)
 // A rival's eyeball: est x (1 + bias + sd x z). Vance's error is partly her density (T.crawl.guess.look): a dense one sits
 // low and looks small, so a deep knock (knockPitch < 1) means the tape will come out over his line.
-function guesses(s, p, est) {
-  const G = TC.guess, z = (k) => gauss(makeRng(hash32(s.seed, s.clock.year, 'crawl', k)));
-  const zr = clamp((p.secret.rho - 1) / T.giant.knock.rhoSd, -3, 3), rd = (x) => Math.max(G.round, Math.round(x / G.round) * G.round);
+function guesses(s: State, p: Giant, est: number): [CrawlGuesse, CrawlGuesse] {
+  const G = TC.guess, z = (k: string|number|boolean|null|undefined) => gauss(makeRng(hash32(s.seed, s.clock.year, 'crawl', k)));
+  const zr = clamp((p.secret.rho - 1) / T.giant.knock.rhoSd, -3, 3), rd = (x: number) => Math.max(G.round, Math.round(x / G.round) * G.round);
   const v = rd(est * (1 + G.vance[0] + G.vance[1] * (-G.look * zr + Math.sqrt(1 - G.look ** 2) * z('vance'))));
   const t = rd(est * (1 + G.tom[0] + G.tom[1] * z('tom')));
   return [{ who: 'vance', n: v }, { who: 'tom', n: t }];
 }
-const rangeOf = (v) => { const r = TC.guess.round, rd = (x) => Math.max(r, Math.round(x / r) * r); return [rd(v * TC.range[0]), rd(v * TC.range[1])]; };
-export const pickRight = (pick, [a, b], est) => (pick === 'under' ? est < a : pick === 'over' ? est > b : est >= a && est <= b);
+const rangeOf = (v: number): [number, number] => { const r = TC.guess.round, rd = (x: number) => Math.max(r, Math.round(x / r) * r); return [rd(v * TC.range[0]), rd(v * TC.range[1])]; };
+const PICKS: readonly CrawlPick[] = ['under', 'mid', 'over'];
+const isPick = (x: string | null | undefined): x is CrawlPick => PICKS.some((p) => p === x);
+export const pickRight = (pick: CrawlPick | null, [a, b]: readonly [number, number], est: number) => (pick === 'under' ? est < a : pick === 'over' ? est > b : est >= a && est <= b);
 
-function crawlCard(s, ctx) {
-  const p = s.giant, { est } = tape(s, p), gs = guesses(s, p, est), [a, b] = rangeOf(gs[0].n), C = CL.crawl;
+function crawlCard(s: State, ctx: Ctx) {
+  const p = s.giant, { est } = tape(s, p), gs = guesses(s, p, est), [vance, tom] = gs, [a, b] = rangeOf(vance.n), C = CL.crawl;
   s.crawl = { year: s.clock.year, step: 'guess', guesses: gs, pick: null, tape: null, range: [a, b], right: null, closest: null,
     review: null, ribbons: [], gags: [] };
-  ctx.card('crawl', {
+  ctx.card({ kind: 'crawl', data: {
     title: C.title, eyebrow: C.eyebrow, speaker: 'edna', hal: C.hal,
-    text: fill(C.text, { v: commas(gs[0].n), t: commas(gs[1].n) }),
+    text: fill(C.text, { v: commas(vance.n), t: commas(tom.n) }),
     guesses: gs.map((g) => ({ ...g, speaker: g.who, line: fill(C[g.who], { n: commas(g.n) }) })),
     range: [a, b], knock: C.knock, knockSub: C.knockSub, tapeLine: C.tape, pull: C.pull,
     choices: [{ id: 'under', label: fill(C.under, { a: commas(a) }) }, { id: 'mid', label: fill(C.mid, { a: commas(a), b: commas(b) }) },
       { id: 'over', label: fill(C.over, { b: commas(b) }) }],
     defaultChoice: 'mid',
-  });
+    } });
 }
 
 // PULL THE TAPE: the real tape (the year's first measures entry), and the reveal: who was within T.crawl.green, who was
 // closest, and whether your range held it.
-function pull(s, ctx, pick) {
-  const c = s.crawl, p = s.giant;
+function pull(s: State, ctx: Ctx, pick: string | null | undefined) {
+  const c = s.crawl, p = s.giant, range = c.range;
   if (c.tape) return c.tape;
-  c.pick = ['under', 'mid', 'over'].includes(pick) ? pick : 'mid';
-  const r = takeTape(s, ctx, p, 'crawl'), est = r.est, near = (n) => Math.abs(n - est) <= TC.green * est;
-  c.right = pickRight(c.pick, c.range, est);
-  const mid = (c.range[0] + c.range[1]) / 2, you = c.pick === 'under' ? c.range[0] : c.pick === 'over' ? c.range[1] : mid;
+  if (!range) throw new Error('crawl: the tape pulled before the card set its range');
+  if (!hasFruit(p)) throw new Error('crawl: the tape pulled with no fruit on the giant');
+  c.pick = isPick(pick) ? pick : 'mid';
+  const r = takeTape(s, ctx, p, 'crawl'), est = r.est, near = (n: number) => Math.abs(n - est) <= TC.green * est;
+  const right = pickRight(c.pick, range, est);
+  c.right = right;
+  const mid = (range[0] + range[1]) / 2, you = c.pick === 'under' ? range[0] : c.pick === 'over' ? range[1] : mid;
   const all = [...c.guesses.map((g) => ({ who: g.who, n: g.n })), { who: 'you', n: you }];
-  c.closest = c.right ? 'you' : all.sort((x, y) => Math.abs(x.n - est) - Math.abs(y.n - est))[0].who;
-  c.tape = { ott: r.ott, est, green: Object.fromEntries(c.guesses.map((g) => [g.who, near(g.n)])) };
+  const closest = right ? 'you' : all.sort((x, y) => Math.abs(x.n - est) - Math.abs(y.n - est))[0]?.who ?? 'you';
+  c.closest = closest;
+  const green = { vance: false, tom: false };
+  for (const g of c.guesses) green[g.who] = near(g.n);
+  const taped = { ott: r.ott, est, green };
+  c.tape = taped;
   c.step = 'taped';
-  const C = CL.crawl, vanceNear = c.tape.green.vance;
-  const verdict = c.right ? C.right : fill(vanceNear ? C.wrong : C.nobody, { est: `${commas(est)} lb` });
-  ctx.emit({ type: 'crawl/tape', ott: r.ott, est, right: c.right, closest: c.closest, pick: c.pick, range: c.range,
-    guesses: c.guesses, green: c.tape.green, verdict, pace: r.pace });
-  return c.tape;
+  const C = CL.crawl, vanceNear = green.vance;
+  const verdict = right ? C.right : fill(vanceNear ? C.wrong : C.nobody, { est: `${commas(est)} lb` });
+  ctx.emit({ type: 'crawl/tape', ott: r.ott, est, right, closest, pick: c.pick, range,
+    guesses: c.guesses, green, verdict, pace: r.pace });
+  return taped;
 }
 
 // The ladder's first rung (rulings R0): through track D's firsts.tape when it is there, else its marks (the foundation's seam).
-function ladder(s, ctx, est, mine) {
+function ladder(s: State, ctx: Ctx, est: number, mine: boolean) {
   const F = ctx.mod('firsts');
   if (F?.tape) return F.tape(s, ctx, { mine, est });
   const crossed = T.firsts.ladder.filter(([lb, id]) => est >= lb && !s.firsts?.career?.[id]).map(([, id]) => id);
@@ -90,8 +101,8 @@ function ladder(s, ctx, est, mine) {
 // happens that morning, whatever else is going on (late summer's lessons sit 25 s apart and leave the queue few windows): the
 // sign, the chart, the pace line and the ladder move for everyone. Edna's line is a moment in the queue (kind 'tape'); if
 // no quiet window comes for it, the tape still happened.
-const sunday = (d) => dow(d) === 0;
-function sundayDue(s) {
+const sunday = (d: number) => dow(d) === 0;
+function sundayDue(s: State) {
   const g = s.giant, d = s.clock.day;
   if (s.clock.phase !== 'grow' || !sunday(d) || !s.unlocks.measure || !alive(g)) return false;
   if (s.clock.year === 1 ? s.story.beats['crawl.crawl'] === undefined : d < D(T.story.y1.crawl)) return false;
@@ -101,9 +112,9 @@ function sundayDue(s) {
 
 // ------------------------------------------------------------ bots: how a bot guesses (bots.js wraps every policy's answer)
 // P.crawlGuess: 'mid' (the card's default) | 'knock' (reads the knock: deep -> over, hollow -> under) | 'blind' (keyed coin)
-export function botChoice(c, s, P) {
+export function botChoice(c: Card, s: State, P: Policy): CrawlPick | undefined {
   if (c.kind !== 'crawl' || !P.crawlGuess || P.crawlGuess === 'mid') return undefined;
-  if (P.crawlGuess === 'blind') return ['under', 'mid', 'over'][Math.floor(next(makeRng(hash32(s.seed, s.clock.year, 'blindGuess'))) * 3)];
+  if (P.crawlGuess === 'blind') return PICKS[Math.floor(next(makeRng(hash32(s.seed, s.clock.year, 'blindGuess'))) * 3)];
   const k = knockPitch(s, s.giant, TC.hush), th = TC.knockRead;   // the Crawl's hushed knock, as the player hears it
   return k < 1 - th ? 'over' : k > 1 + th ? 'under' : 'mid';
 }
@@ -111,22 +122,25 @@ export function botChoice(c, s, P) {
 export default {
   id: 'crawl',
   // (the save v4 migration's shape: the Crawl's card fills in tape, range, right and closest when it comes)
-  init(s) { s.crawl = { year: 0, step: null, guesses: [], pick: null, review: null, ribbons: [], gags: [] }; },
-  dayStart(s, ctx) {
+  init(s: State) { s.crawl = { year: 0, step: null, guesses: [], pick: null, review: null, ribbons: [], gags: [] }; },
+  dayStart(s: State, ctx: Ctx) {
     if (!sundayDue(s)) return;
-    const p = s.giant, prev = p.measures.at(-1), first = !p.measures.some((x) => x.by === 'edna'), r = takeTape(s, ctx, p, 'edna');
+    const p = s.giant;
+    if (!hasFruit(p)) return;
+    const prev = p.measures.at(-1), r = takeTape(s, ctx, p, 'edna');
     const delta = prev ? r.est - prev.est : 0;
     ladder(s, ctx, r.est, false);                     // a rung it crossed waits for its own window (track D's Firsts)
     // the number is news, not a scene: a low-salience toast that never takes one of late summer's few quiet windows
     const text = ctx.fresh('edna.sunday', CL.sunday, makeRng(hash32(s.seed, s.clock.year, s.clock.day, 'sunday')));
-    ctx.moment({ id: `tape:${s.clock.year}:${s.clock.day}`, kind: 'toast', maxWaitDays: TC.sunday.wait, data: { est: r.est, delta, first },
+    if (text == null) return;
+    ctx.moment({ id: `tape:${s.clock.year}:${s.clock.day}`, kind: 'toast', maxWaitDays: TC.sunday.wait,
       toast: { text: line(s, text, { est: `${commas(r.est)} lb`, delta: `${delta >= 0 ? '+' : '−'}${commas(Math.abs(delta))} lb` }), icon: 'scale', cls: 'good' } });
   },
   beats: [
     // the Vine Crawl replaces Edna's Aug 1 tape lesson (order 10): the beat is the card, and the card brings the tape
     { id: 'crawl.crawl', year: 1, order: 10, at: T.story.y1.crawl,
-      when: (s) => s.clock.phase === 'grow' && s.clock.day >= D(T.story.y1.crawl) && hasFruit(s.giant) && alive(s.giant),
-      run(s, ctx) {
+      when: (s: State) => s.clock.phase === 'grow' && s.clock.day >= D(T.story.y1.crawl) && hasFruit(s.giant) && alive(s.giant),
+      run(s: State, ctx: Ctx) {
         ctx.unlock('measure');
         // the bug lesson's deadline was the Crawl ("squish 'em by the Vine Crawl"): its goal lets go here, quietly
         ctx.goalLapse('bugs', false);
@@ -144,16 +158,16 @@ export default {
     },
   },
   cards: {
-    crawl(s, card, choice, ctx) {
+    crawl(s, _card, choice, ctx) {
       const c = s.crawl;
-      if (!c || c.step === 'done') return;
-      if (!c.tape) pull(s, ctx, choice);                 // a bot (or a tap outside) answers without pulling first
+      if (!c || c.step === 'done') return undefined;
+      const taped = c.tape ?? pull(s, ctx, choice);      // a bot (or a tap outside) answers without pulling first
       c.step = 'done';
       if (c.right) ctx.stamp('eagleEye');
-      ladder(s, ctx, c.tape.est, true);
+      ladder(s, ctx, taped.est, true);
       ctx.say('gran', [CL.crawl.gran]);                 // (Edna's Sunday-tape promise is in the card's reveal)
-      return { est: c.tape.est, right: c.right };
+      return { ok: true, est: taped.est, right: c.right ?? false };
     },
   },
-  summary(s) { return { crawlRight: s.crawl?.right ? 1 : 0 }; },
-};
+  summary(s: State) { return { crawlRight: s.crawl?.right ? 1 : 0 }; },
+} satisfies SimModule;

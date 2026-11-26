@@ -12,17 +12,19 @@
 //   s.story.moments  the moments queue: ctx.moment({ id, kind, prio, maxWaitDays, merge, ... }), one per quiet window
 //   s.story.receipts [{ id, kind, due, data, say? }]: the consequence of a choice, said later through the queue
 //   s.story.said     fresh()'s memory: { [key]: [indices said since the bag was last refilled] } (across years, <= 400 keys)
+//   s.story.heard    [[text, year]]: the Giant's receipt lines lately said (giant.ts receiptFresh)
 //   s.story.stamps   { [id]: { y, d } }: stamps, recorded silently in Wave 1 (stamp())
 //   s.story.alerts   { [alertId]: [year, day] }: the last time each alert came (the threat rule in game.js, quiet())
 //   s.story.receiptDay  the day the last receipt was said (at most one every T.story.receiptGapDays)
 // More out-events: moment { id, kind, group, kinds, waited, data, stop?, mine? }, momentDrop { id, kind, waited },
 //   road { id, day } (a non-beat stop on the Road was reached: a planned row went in), stamp { id }.
 import { T } from './tuning.js';
-import { fill } from './util.js';
-import { next } from './rng.js';
+import { fill, own } from './util.js';
+import { next, Rng } from './rng.js';
 import { dayOf, realSeconds, weekends, WEIGHOFF } from './calendar.js';
-import { ROAD, ROAD_STOPS } from './road-lines.js';
-
+import { ROAD, ROAD_STOPS, type DatedStop, type RoadStop } from './road-lines.js';
+import type { ActionOf, ActionResult, Beat, SimModule, State, Ctx, MomentItem, Card, CardIn, CardKind, CardOf, FreshEntry, GoalOpts, MomentHandlerId, MomentHandlers, MomentRun, ReceiptIn, Lapse, MomentIn, SayOpts, Target, Vars } from "./types.js";
+import type { StoryDialog, StoryGoal } from './state.js';
 // ------------------------------------------------------------ the cast (portrait keys for the UI)
 // species: null means "the player's species" (Gran is family). portrait: the renderer's portrait key when it
 // differs from the speaker id.
@@ -731,7 +733,7 @@ export const LINES = {
     shinyNames: { sphere: 'perfect sphere', heart: 'heart', smiley: 'smiley scar', twins: 'fused twins', beak: "Mayor's beak", weighmaster: "Weighmaster's face" },
     forklift: {
       title: 'Forklift rental', eyebrow: 'September prep', text: "Grange rents a forklift for weigh-off day. It's been sat on. Not by me.",
-      rent: ['Rent it: ${price}', 'Skips the HEAVE. A 0.3% chance of a bump.'], heave: ["We'll HEAVE", 'Neighbours, a ring and four good beats. Free.'],
+      rent: ['Rent it: ${price}', 'Skips the HEAVE. A 0.3% chance of a bump.'] satisfies [string, string], heave: ["We'll HEAVE", 'Neighbours, a ring and four good beats. Free.'] satisfies [string, string],
       rented: 'Forklift booked for the weigh-off. It smells faintly of seal.',
     },
     crier: {
@@ -852,25 +854,25 @@ export const LINES = {
     pins: false,
     milk: ['moss', 'The dust settled... for now... zzz.'],
     rotate: ['gran', "She's settled her bottom now. Next year, turn her early."],
-  },
+  } satisfies Record<string, Lapse>,
 };
 
 // Template variables every line can use.
-export function vars(s, extra) {
-  const sp = SPECIES[s.meta.species] || SPECIES.possum;
+export function vars(s: State, extra?: Vars): Vars {
+  const sp = own(SPECIES, s.meta.species) ?? SPECIES.possum;
   const name = s.giant?.name || 'her';
   return { surname: s.meta.surname, Surname: s.meta.surname, species: sp.one, species_pl: sp.many, farm: s.meta.farmName,
     FARM: s.meta.farmName.toUpperCase(), year: s.clock.year, name, NAME: name.toUpperCase(), ...extra };
 }
-export const line = (s, str, extra) => fill(str, vars(s, extra));
+export const line = (s: State, str: string, extra?: Vars) => fill(str, vars(s, extra));
 
 // ------------------------------------------------------------ dialogue, cards, goals, log
-let inBeat = null; // set while a beat's run() executes: its dialogue is an intro (holds the clock, replayable)
+let inBeat: string | null = null; // set while a beat's run() executes: its dialogue is an intro (holds the clock, replayable)
 const MAX_CHATTER = 6;
 
-export function say(s, ctx, speaker, lines, opts = {}) {
+export function say(s: State, ctx: Ctx, speaker: string, lines: string | string[], opts: SayOpts = {}) {
   const L = (Array.isArray(lines) ? lines : [lines]).slice(0, T.story.linesPerCard).map((l) => line(s, l, opts.vars));
-  const item = { id: 'd' + ++s.story.seq, speaker, lines: L };
+  const item: StoryDialog = { id: 'd' + ++s.story.seq, speaker, lines: L };
   if (inBeat) {
     item.beat = inBeat; item.pause = true; s.story.replay[inBeat] = { speaker, lines: L };
     // a lesson takes the stage: chatter still waiting its turn (a tip, a lapse line queued under fast-forward) is old news
@@ -878,7 +880,6 @@ export function say(s, ctx, speaker, lines, opts = {}) {
   }
   if (opts.pause) item.pause = true;
   if (opts.glide) item.glide = opts.glide;
-  if (opts.highlight) item.highlight = opts.highlight;
   s.story.dialog.push(item);
   // Chatter that nobody reads must not pile up forever (intros are kept).
   while (s.story.dialog.filter((d) => !d.pause).length > MAX_CHATTER) s.story.dialog.splice(s.story.dialog.findIndex((d) => !d.pause), 1);
@@ -887,26 +888,27 @@ export function say(s, ctx, speaker, lines, opts = {}) {
   return item.id;
 }
 
-export function card(s, ctx, kind, data = {}) {
-  const c = { id: 'c' + ++s.story.seq, kind, data };
+export function card(s: State, ctx: Ctx, raised: CardIn) {
+  const c: Card = { id: 'c' + ++s.story.seq, ...raised };
   s.story.cards.push(c);
   if (s.clock.speed > 4) s.clock.speed = 1; // a card ends a Skip
-  ctx.emit({ type: 'card', id: c.id, kind });
+  ctx.emit({ type: 'card', id: c.id, kind: c.kind });
   return c.id;
 }
 
 // opts: { until (the last sim day it is worth doing), lapse: [speaker, line] or a toast line, quiet (re-targeting the
 // same goal: no chime) }. A goal never goes stale (design §12): the player completes it, it re-targets, or its day passes
 // and it lapses with a graceful line (goalLapse).
-export function goal(s, ctx, id, text, target, opts = {}) {
+export function goal(s: State, ctx: Ctx, id: string | null, text?: string | null, target?: Target | null, opts: GoalOpts = {}) {
   if (id == null) { if (s.story.goal) ctx.emit({ type: 'goal', id: null }); s.story.goal = null; return; }
-  const lapse = opts.lapse ?? LAPSE[id] ?? null;
-  s.story.goal = { id, text: line(s, text ?? LINES.goals[id] ?? id), target: target || null, since: s.clock.clock1x,
+  const lapse = opts.lapse ?? own(LAPSE, id) ?? null;
+  const g: StoryGoal = { id, text: line(s, text ?? own(LINES.goals, id) ?? id), target: target || null, since: s.clock.clock1x,
     until: opts.until ?? untilOf(s, id), lapse };
-  ctx.emit({ type: 'goal', id, text: s.story.goal.text, quiet: !!opts.quiet });
+  s.story.goal = g;
+  ctx.emit({ type: 'goal', id, text: g.text, quiet: !!opts.quiet });
 }
 // Clear the goal only if it is still the one the player just completed.
-export function goalDone(s, ctx, id) {
+export function goalDone(s: State, ctx: Ctx, id: string) {
   if (s.story.goal?.id !== id) return false;
   s.story.goal = null;
   ctx.emit({ type: 'goalDone', id });
@@ -914,7 +916,7 @@ export function goalDone(s, ctx, id) {
 }
 // The moment for a goal has passed (its day ended, the bugs moved on, the fox made do): clear it without a "Done" and
 // say so kindly. line: false for no line, a string, or [speaker, text]; default the goal's own lapse line.
-export function goalLapse(s, ctx, id, ln) {
+export function goalLapse(s: State, ctx: Ctx, id: string, ln?: Lapse) {
   const g = s.story.goal;
   if (!g || g.id !== id) return false;
   s.story.goal = null;
@@ -928,23 +930,23 @@ export function goalLapse(s, ctx, id, ln) {
   return true;
 }
 // How long each year-1 Next-up goal stays worth doing, as a last sim day (inclusive). Weekend goals last their day.
-function untilOf(s, id) {
-  const d = s.clock.day, w = LAPSE_DAYS[id];
+function untilOf(s: State, id: string) {
+  const d = s.clock.day, w = own(LAPSE_DAYS, id);
   if (w === 'day') return d;
   if (typeof w === 'string') return Math.max(d, dayOf(w));
-  return w > 0 ? d + w : null;
+  return w != null && w > 0 ? d + w : null;
 }
 // (Spring and late-summer goals lapse about halfway to the next lesson, so their line keeps clear of both.)
-const LAPSE_DAYS = {
+const LAPSE_DAYS: Record<string, number | string | undefined> = {
   marlene: 8, water: 6, kelp: 6, plant: T.patch.window[1], patchWater: 10, measure: 6, shade: T.weather.y1.heat.at(-1),
   honey: 8, rituals: 5, ringUp: 'day', wants: 'day', restock: 'day', wagons: 'day', route46: 'day', pins: 'day',
   milk: 10, rotate: 14,
 };
-const LAPSE = LINES.lapse;
+const LAPSE: Record<string, Lapse> = LINES.lapse;
 // The goal's day has passed: let it go gracefully (a day's end, before tomorrow's lesson sets a new one).
 // A goal with a line waits for a quiet moment to say it (tomorrow, or the next lesson re-aims the chip); weekend lessons
 // end with their day regardless.
-function lapseDue(s, ctx, force = false) {
+function lapseDue(s: State, ctx: Ctx, force = false) {
   const g = s.story.goal;
   if (g?.until == null || s.clock.day < g.until) return;
   const late = s.clock.day >= g.until + T.story.lapseWait;     // no quiet moment came: let it go silently
@@ -952,20 +954,22 @@ function lapseDue(s, ctx, force = false) {
 }
 // Modules may declare goals: { [id]: (s, goal) => still worth doing? } (the fox made do, the joey turned up on his own);
 // the current goal is checked every morning and every weekend minute, and lets go when its moment has passed.
-const liveCache = new WeakMap();
-function goalLive(s, ctx) {
+type GoalLive = NonNullable<SimModule['goals']>;
+const liveCache = new WeakMap<readonly SimModule[], GoalLive>();
+function goalLive(s: State, ctx: Ctx) {
   const g = s.story.goal;
   if (!g) return;
   let m = liveCache.get(ctx.modules);
-  if (!m) { m = {}; for (const mod of ctx.modules) Object.assign(m, mod.goals || {}); liveCache.set(ctx.modules, m); }
-  if (m[g.id] && !m[g.id](s, g)) goalLapse(s, ctx, g.id);
+  if (!m) { m = {}; for (const mod of ctx.modules) Object.assign(m, mod.goals); liveCache.set(ctx.modules, m); }
+  const live = own(m, g.id);
+  if (live && !live(s, g)) goalLapse(s, ctx, g.id);
 }
 
-export function log(s, ctx, id, score = 0, v = {}) {
+export function log(s: State, _ctx: Ctx, id: string, score = 0, v: Vars = {}) {
   s.story.log.push({ year: s.clock.year, day: s.clock.day, id, score, vars: v });
   if (s.story.log.length > 300) s.story.log.splice(0, s.story.log.length - 300);
 }
-export const yearLog = (s, year = s.clock.year) => s.story.log.filter((e) => e.year === year).sort((a, b) => b.score - a.score);
+export const yearLog = (s: State, year = s.clock.year) => s.story.log.filter((e) => e.year === year).sort((a, b) => b.score - a.score);
 
 // ------------------------------------------------------------ onboarding beats
 // Beats: { id, year?, years?: [a, b], order?, gap?: false, urgent?(s), at?, pin?, when(s, ctx), run(s, ctx) }, declared by
@@ -975,46 +979,48 @@ export const yearLog = (s, year = s.clock.year) => s.story.log.filter((e) => e.y
 // is running; beat-driven phases (weigh-off, winter) are paced by the player instead.
 // gap: false beats (toast-only lessons) neither wait for nor reset the gap. An urgent(s) beat explains something that
 // is happening right now (a live creak), so it skips the wait but still resets the gap for the intros after it.
-const beatCache = new WeakMap();
-export function allBeats(modules) {
-  if (!beatCache.has(modules)) {
-    const list = [];
+type Ordered = Beat & { k: number };
+const beatCache = new WeakMap<readonly SimModule[], Ordered[]>();
+export function allBeats(modules: readonly SimModule[]) {
+  let list = beatCache.get(modules);
+  if (!list) {
     // one object shape for every beat (runBeats walks them every weekend minute)
-    modules.forEach((m, mi) => (m.beats || []).forEach((b, bi) => list.push({ id: b.id, year: b.year, years: b.years, order: b.order,
+    list = modules.flatMap((m, mi) => (m.beats ?? []).map((b, bi) => ({ id: b.id, year: b.year, years: b.years, order: b.order,
       gap: b.gap, urgent: b.urgent, at: b.at, pin: b.pin, soon: b.soon, when: b.when, run: b.run, road: b.road, est: b.est, k: mi * 100 + bi })));
     list.sort((a, b) => (a.order ?? 999) - (b.order ?? 999) || a.k - b.k);
     beatCache.set(modules, list);
   }
-  return beatCache.get(modules);
+  return list;
 }
-const yearOk = (b, y) => (b.years ? y >= b.years[0] && y <= b.years[1] : b.year === undefined || b.year === y);
-const clocked = (s) => s.clock.phase === 'grow' || s.clock.phase === 'october';
+const yearOk = (b: Beat, y: number) => (b.years ? y >= b.years[0] && y <= b.years[1] : b.year === undefined || b.year === y);
+const clocked = (s: State) => s.clock.phase === 'grow' || s.clock.phase === 'october';
 // allBeats(modules) narrowed to one year, in the same order (runBeats walks it every weekend minute).
-const yearBeatCache = new WeakMap();
-function beatsOfYear(modules, y) {
+const yearBeatCache = new WeakMap<readonly SimModule[], Map<number, Beat[]>>();
+function beatsOfYear(modules: readonly SimModule[], y: number) {
   let byYear = yearBeatCache.get(modules);
   if (!byYear) yearBeatCache.set(modules, (byYear = new Map()));
-  if (!byYear.has(y)) byYear.set(y, allBeats(modules).filter((b) => yearOk(b, y)));
-  return byYear.get(y);
+  let list = byYear.get(y);
+  if (!list) byYear.set(y, (list = allBeats(modules).filter((b) => yearOk(b, y))));
+  return list;
 }
-const pinCache = new WeakMap();
-function pinsOfYear(modules, y) {
+const pinCache = new WeakMap<readonly SimModule[], Map<number, Beat[]>>();
+function pinsOfYear(modules: readonly SimModule[], y: number) {
   let byYear = pinCache.get(modules);
   if (!byYear) pinCache.set(modules, (byYear = new Map()));
-  if (!byYear.has(y)) byYear.set(y, beatsOfYear(modules, y).filter((b) => b.pin));
-  return byYear.get(y);
+  let list = byYear.get(y);
+  if (!list) byYear.set(y, (list = beatsOfYear(modules, y).filter((b) => b.pin)));
+  return list;
 }
 
-export function runBeats(s, ctx, beats) {
+export function runBeats(s: State, ctx: Ctx, beats?: readonly Beat[]) {
   if (s.clock.hands) return null;                    // a hands-on close-up is open: lessons wait until it closes
   const now = s.clock.clock1x, last = s.story.lastIntro1x, y = s.clock.year, done = s.story.beats;
   const gapOk = !clocked(s) || last == null || now - last >= T.story.introGap1x - 1e-9;
   const list = beats ?? beatsOfYear(ctx.modules, y), pins = beats ? beats.filter((b) => b.pin) : pinsOfYear(ctx.modules, y);
-  let soon;                                          // a pinned date is less than an intro gap away (computed lazily)
+  let soon: boolean | undefined;                     // a pinned date is less than an intro gap away (computed lazily)
   // pinned beats (dates the story can't move: Hal's shade warning the day before the scripted heat) go first when due,
   // then the rest in order (one walk over both lists: runBeats runs every weekend minute)
-  for (let i = 0, n = pins.length + list.length; i < n; i++) {
-    const pinned = i < pins.length, b = pinned ? pins[i] : list[i - pins.length];
+  for (const [pinned, b] of [...pins.map((b) => [true, b] as const), ...list.map((b) => [false, b] as const)]) {
     if ((b.pin && !pinned) || done[b.id] !== undefined || (beats && !yearOk(b, y))) continue;
     if (!b.when(s, ctx)) continue;
     if (b.gap !== false && !b.urgent?.(s)) {
@@ -1031,7 +1037,7 @@ export function runBeats(s, ctx, beats) {
   }
   return null;
 }
-function pinnedSoon(s, pins) {
+function pinnedSoon(s: State, pins: readonly Beat[]) {
   if (!clocked(s) || !pins.length) return false;
   const d = s.clock.day;
   for (const b of pins) {
@@ -1043,18 +1049,18 @@ function pinnedSoon(s, pins) {
 }
 // A beat's trigger day: `at` is a date ('Sep 1') or, for a lesson that follows the plant, a function of the state
 // (the giant's first flower) that returns a sim day or null while it is not known yet.
-function atDay(s, b) {
+function atDay(s: State, b: Beat) {
   if (b.at == null) return null;
   return typeof b.at === 'function' ? b.at(s) ?? null : dayOf(b.at);
 }
 // Scripted teaching events (the W3 heat wave, the W3 lost joey) count as intros for spacing.
-export function markIntro(s) { s.story.lastIntro1x = s.clock.clock1x; }
+export function markIntro(s: State) { s.story.lastIntro1x = s.clock.clock1x; }
 // Unprompted chatter (a tip, the kelp wash-up, the honey toast) keeps clear of other chatter too.
-export function markChatter(s) { s.story.lastChatter1x = s.clock.clock1x; }
+export function markChatter(s: State) { s.story.lastChatter1x = s.clock.clock1x; }
 // Does an intro (a beat with spacing) wait to fire right now, or fall within `ahead` 1x-seconds? A beat may declare
 // `at`, its trigger date ('Sep 12'), so chatter can keep clear of it before it is due.
 // (A toast-only lesson counts here too: it is a new thing for the player, and Old Moss waits for it.)
-export function introNear(s, ctx, ahead = T.story.chatterGap1x, self = null) {
+export function introNear(s: State, ctx: Ctx, ahead = T.story.chatterGap1x, self: string | null = null) {
   const d = s.clock.day, done = s.story.beats;
   for (const b of beatsOfYear(ctx.modules, s.clock.year)) {
     if (done[b.id] !== undefined || b.id === self) continue;
@@ -1068,11 +1074,11 @@ export function introNear(s, ctx, ahead = T.story.chatterGap1x, self = null) {
 // the chatterGap1x after an intro, nor in the chatterGap1x before a dated one, nor while one waits for its slot, nor
 // while a lesson that waits on the farm (the first dry week) says it may come any day now (its `soon(s)`).
 // A moment waiting in the queue has the next window: chatter that isn't queued (a tip, a lapse line) makes way for it.
-export function quietForChatter(s, ctx, self = null) {
+export function quietForChatter(s: State, ctx: Ctx, self: string | null = null) {
   return quietWindow(s, ctx, self) && !momentWaiting(s);
 }
 // (exported for the delight lane: a year-1 slot's delight takes the next window even while lower-prio moments wait)
-export function quietWindow(s, ctx, self = null) {
+export function quietWindow(s: State, ctx: Ctx, self: string | null = null) {
   const last = s.story.lastIntro1x, chat = s.story.lastChatter1x, gap = T.story.chatterGap1x, now = s.clock.clock1x;
   if ((last != null && now - last < gap) || (chat != null && now - chat < gap)) return false;
   if (introNear(s, ctx, gap, self)) return false;
@@ -1086,26 +1092,27 @@ export function quietWindow(s, ctx, self = null) {
 // tally, a receipt, Grandpa's notes. The growing year has about 8 quiet windows in June and July, not one for every row of
 // the calendar, so they take turns: one moment per quiet window (quietWindow: 12 s of 1x clear of lessons, dated lessons
 // ahead and other moments), the highest prio first, oldest first among equals. The calendar is what the queue delivers.
-//   m = { id, kind = 'moment', prio = T.moments.prio[kind] ?? 0, maxWaitDays = T.moments.maxWaitDays, merge = null,
-//         data = null, say = null ([speaker, line | lines]), toast = null (text | { text, cls, icon }), stop = false,
-//         mine = false, handler = kind }
+//   m = { id, kind, prio = T.moments.prio[kind] ?? 0, maxWaitDays = T.moments.maxWaitDays, merge = null,
+//         say = null ([speaker, line | lines]), toast = null (text | { text, cls, icon }), stop = false,
+//         mine = false, handler?, data? }
 //   - merge: moments queued the same game day with the same key become one beat (sowing + note + row-in + sprouts)
 //   - kind 'toast' is low salience ("window open", a minor milestone): it never takes a window, only waits for the lesson
 //   - past maxWaitDays a moment is dropped; its handler's drop(s, ctx, m) may file it silently (a First with no banner)
 //   - mine: the answer to the player's own tap or card shows at once (it still counts for the 12 s after it)
 //   - stop: Skip stops when it shows (a sowing day, a ✦ pin)
 //   - threats (heat, creak, slips) are alerts (ctx.alert), never moments: moment() refuses them
-// When a moment runs, the handler named by m.handler (default its kind) runs: a module declares
+// When a moment runs, the handler named by m.handler runs: a module declares
 // moments: { [name]: { run(s, ctx, m, group), drop?(s, ctx, m) } }. A moment with no handler just says its `say` and toasts
 // its `toast`. Either way one out-event { type: 'moment', id, kind, group, kinds, waited, data, stop?, mine? } goes to the UI.
 const THREAT_KINDS = new Set(['alert', 'threat']);
-export function moment(s, ctx, m = {}) {
-  if (!m || !m.id || m.threat || THREAT_KINDS.has(m.kind) || T.clock.threats[m.id] !== undefined) return null;
-  const kind = m.kind || 'moment', q = s.story.moments, d = s.clock.day;
-  const item = { id: String(m.id), kind, prio: m.prio ?? T.moments.prio[kind] ?? 0, day: d,
-    wait: m.maxWaitDays ?? (kind === 'receipt' ? T.moments.receiptWaitDays : T.moments.maxWaitDays), merge: m.merge ?? null,
-    data: m.data ?? null, say: m.say ?? null, toast: m.toast ?? null, stop: !!m.stop, handler: m.handler || kind, seq: ++s.story.seq, with: [] };
-  if (m.mine) { runGroup(s, ctx, item, [item], true); markChatter(s); return item; }
+export function moment(s: State, ctx: Ctx, m: MomentIn) {
+  const { id, kind, prio, maxWaitDays, merge, say: sayIt, toast, stop, mine, threat, ...call } = m;
+  if (!id || threat || THREAT_KINDS.has(kind) || own(T.clock.threats, id) !== undefined) return null;
+  const q = s.story.moments, d = s.clock.day;
+  const item: MomentItem = { ...call, id, kind, prio: prio ?? own(T.moments.prio, kind) ?? 0, day: d,
+    wait: maxWaitDays ?? (kind === 'receipt' ? T.moments.receiptWaitDays : T.moments.maxWaitDays), merge: merge ?? null,
+    say: sayIt ?? null, toast: toast ?? null, stop: !!stop, seq: ++s.story.seq, with: [] };
+  if (mine) { runGroup(s, ctx, item, [item], true); markChatter(s); return item; }
   if (q.some((x) => x.id === item.id || x.with.some((w) => w.id === item.id))) return null;   // already waiting
   const lead = item.merge && q.find((x) => x.merge === item.merge && x.day === d);
   if (lead) {
@@ -1117,10 +1124,10 @@ export function moment(s, ctx, m = {}) {
   q.push(item);
   return item;
 }
-export const momentWaiting = (s) => !!s.story.moments?.some((m) => m.kind !== 'toast');
+export const momentWaiting = (s: State) => !!s.story.moments?.some((m) => m.kind !== 'toast');
 
 // One pass of the queue (game.js: every morning and weekend minute, after the beats and the director).
-export function runMoments(s, ctx) {
+export function runMoments(s: State, ctx: Ctx) {
   const q = s.story.moments;
   if (!q?.length) return null;
   const d = s.clock.day;
@@ -1137,27 +1144,37 @@ export function runMoments(s, ctx) {
     }
   }
   if (!momentWaiting(s) || !quietWindow(s, ctx)) return null;
-  let best = null;
+  let best: MomentItem | undefined;
   for (const m of s.story.moments) if (m.kind !== 'toast' && (!best || m.prio > best.prio || (m.prio === best.prio && m.seq < best.seq))) best = m;
+  if (!best) return null;
   take(s, best);
   runGroup(s, ctx, best, [best, ...best.with]);
   markChatter(s);
   return best.id;
 }
-const take = (s, m) => { s.story.moments = s.story.moments.filter((x) => x !== m); };
+const take = (s: State, m: MomentItem) => { s.story.moments = s.story.moments.filter((x) => x !== m); };
 
-const handlerCache = new WeakMap();
-function handlerOf(ctx, name) {
+const handlerCache = new WeakMap<readonly SimModule[], MomentHandlers>();
+function handlersOf(ctx: Ctx) {
   let h = handlerCache.get(ctx.modules);
-  if (!h) { h = {}; for (const mod of ctx.modules) Object.assign(h, mod.moments || {}); handlerCache.set(ctx.modules, h); }
-  return h[name] || null;
+  if (!h) { h = {}; for (const mod of ctx.modules) Object.assign(h, mod.moments); handlerCache.set(ctx.modules, h); }
+  return h;
 }
-function runGroup(s, ctx, lead, group, mine = false) {
+function answerCard<K extends CardKind>(s: State, c: CardOf<K>, choice: string, ctx: Ctx, a: ActionOf<'card/answer'>): ActionResult | undefined {
+  for (const m of ctx.modules) { const h = m.cards?.[c.kind]; if (h) return h(s, c, choice, ctx, a); }
+  return undefined;
+}
+function runHandler<H extends MomentHandlerId>(s: State, ctx: Ctx, m: MomentRun<H>, group: MomentItem[]) {
+  handlersOf(ctx)[m.handler]?.run(s, ctx, m, group);
+}
+function dropHandler<H extends MomentHandlerId>(s: State, ctx: Ctx, m: MomentRun<H>) {
+  handlersOf(ctx)[m.handler]?.drop?.(s, ctx, m);
+}
+function runGroup(s: State, ctx: Ctx, lead: MomentItem, group: MomentItem[], mine = false) {
   const d = s.clock.day, order = [...group].sort((a, b) => b.prio - a.prio || a.seq - b.seq);
-  const said = {};                                                    // one card per speaker: their lines merge (<= 3)
+  const said: Record<string, string[]> = {};                          // one card per speaker: their lines merge (<= 3)
   for (const m of order) {
-    const h = handlerOf(ctx, m.handler);
-    if (h?.run) h.run(s, ctx, m, order);
+    if (m.handler !== undefined) runHandler(s, ctx, m, order);
     if (m.say) { const [who, ln] = m.say; (said[who] ||= []).push(...(Array.isArray(ln) ? ln : [ln])); }
     if (m.toast) { const o = typeof m.toast === 'string' ? { text: m.toast } : m.toast; ctx.emit({ type: 'toast', text: line(s, o.text), cls: o.cls || '', icon: o.icon || 'sparkle' }); }
     if (m.kind === 'receipt') s.story.receiptDay = d;
@@ -1166,12 +1183,12 @@ function runGroup(s, ctx, lead, group, mine = false) {
   ctx.emit({ type: 'moment', id: lead.id, kind: lead.kind, group: order.map((m) => m.id), kinds: order.map((m) => m.kind),
     waited: d - Math.min(...order.map((m) => m.day)), data: lead.data, stop: order.some((m) => m.stop), mine });
 }
-function dropMoment(s, ctx, m) {
-  for (const x of [m, ...m.with]) handlerOf(ctx, x.handler)?.drop?.(s, ctx, x);
+function dropMoment(s: State, ctx: Ctx, m: MomentItem) {
+  for (const x of [m, ...m.with]) if (x.handler !== undefined) dropHandler(s, ctx, x);
   ctx.emit({ type: 'momentDrop', id: m.id, kind: m.kind, group: [m.id, ...m.with.map((x) => x.id)], waited: s.clock.day - m.day });
 }
 // Everything still waiting goes (a new year, the end of the season): each is dropped through its handler.
-export function dropMoments(s, ctx) {
+export function dropMoments(s: State, ctx: Ctx) {
   const q = s.story.moments || [];
   s.story.moments = [];
   for (const m of q) dropMoment(s, ctx, m);
@@ -1181,19 +1198,19 @@ export function dropMoments(s, ctx) {
 // The consequence of a choice, said later at a visible event ("Stump girl's creaking. Told you."). The choice handler files it
 // with its due day; on that day it joins the moments queue (kind 'receipt', handler r.kind), at most one every
 // T.story.receiptGapDays, and the handler (or its say) words it from the state then.
-export function receipt(s, ctx, { id, kind, due, data = null, say: sayIt = null }) {
-  if (!id || !kind) return false;
+export function receipt(s: State, r: ReceiptIn) {
+  if (!r.id) return false;
   const R = s.story.receipts;
-  if (R.some((r) => r.id === id)) return false;
-  R.push({ id, kind, due: due ?? s.clock.day, data, say: sayIt });
+  if (R.some((x) => x.id === r.id)) return false;
+  R.push({ ...r, due: r.due ?? s.clock.day, say: r.say ?? null });
   R.sort((a, b) => a.due - b.due);
   return true;
 }
-function receiptsDue(s, ctx) {
-  const R = s.story.receipts, d = s.clock.day;
-  if (!R?.length || R[0].due > d || s.story.moments.some((m) => m.kind === 'receipt')) return;
+function receiptsDue(s: State, ctx: Ctx) {
+  const R = s.story.receipts, d = s.clock.day, r = R[0];
+  if (!r || r.due > d || s.story.moments.some((m) => m.kind === 'receipt')) return;
   if (s.story.receiptDay != null && d - s.story.receiptDay < T.story.receiptGapDays) return;
-  const r = R.shift();
+  R.shift();
   moment(s, ctx, { id: `receipt:${r.id}`, kind: 'receipt', handler: r.kind, data: { ...r.data, receipt: r.id }, say: r.say });
 }
 
@@ -1202,13 +1219,14 @@ function receiptsDue(s, ctx) {
 // new round that never opens with the line just said. Entries are strings or { t, when?(s), w? } (state-gated, weighted). The memory lives
 // in s.story.said[key] across years (capped at 400 keys). rng: a stream (ctx.rng('chatter')) or a keyed makeRng(...): pass
 // the stream whose timing the line follows, never weather, crowd or rivals. Returns the entry's text (fill it with ctx.line).
-export function fresh(s, rng, key, list) {
-  const said = (s.story.said ||= {});
-  const pool = [];
+export function fresh(s: State, rng: Rng, key: string, list: readonly FreshEntry[]) {
+  const said = s.story.said;
+  const pool: [FreshLine, number][] = [];
   list.forEach((e, i) => { const o = typeof e === 'string' ? { t: e } : e; if (!o.when || o.when(s)) pool.push([o, i]); });
-  if (!pool.length) return null;
-  let mem = said[key] || [];
-  const free = (ex) => pool.filter(([, i]) => !ex.includes(i)), heavy = (c) => c.filter(([o]) => (o.w ?? 1) > 0);
+  const first = pool[0];
+  if (!first) return null;
+  let mem = said[key] ?? [];
+  const free = (ex: readonly number[]) => pool.filter(([, i]) => !ex.includes(i)), heavy = (c: [FreshLine, number][]) => c.filter(([o]) => (o.w ?? 1) > 0);
   let cand = heavy(free(mem));
   if (!cand.length) {                              // the round is used up: a new one, never opening with the line just said
     const last = mem.slice(-1);
@@ -1219,20 +1237,20 @@ export function fresh(s, rng, key, list) {
   }
   let total = 0;
   for (const [o] of cand) total += Math.max(0, o.w ?? 1);
-  let x = next(rng) * total, pickI = cand[cand.length - 1];
+  let x = next(rng) * total, pickI = cand[cand.length - 1] ?? first;
   for (const c of cand) { x -= Math.max(0, c[0].w ?? 1); if (x < 0) { pickI = c; break; } }
   delete said[key];                                   // re-insert: the oldest keys go first when the memory is full
   said[key] = [...mem, pickI[1]];
-  const keys = Object.keys(said);
-  for (let k = 0; k < keys.length - FRESH_KEYS; k++) delete said[keys[k]];
+  for (const k of Object.keys(said).slice(0, -FRESH_KEYS)) delete said[k];
   return pickI[0].t;
 }
+type FreshLine = Exclude<FreshEntry, string>;
 const FRESH_KEYS = 400;
 
 // ------------------------------------------------------------ [foundation] stamps (recorded silently in Wave 1)
-export function stamp(s, ctx, id) {
-  const st = (s.story.stamps ||= {});
-  if (st[id]) return false;
+export function stamp(s: State, ctx: Ctx, id: string) {
+  const st = s.story.stamps;
+  if (own(st, id)) return false;
   st[id] = { y: s.clock.year, d: s.clock.day };
   ctx.emit({ type: 'stamp', id });
   return true;
@@ -1243,16 +1261,16 @@ export function stamp(s, ctx, id) {
 // title, why?, icon }]. Beats are stops when they carry road: { title, why, icon } (or ROAD[id] in road-lines.js); their day is
 // `at` (a date or a function of the state), else est(s), else null (shown last, "soon"). Planned rows' sowing days, the
 // October weekends and the weigh-off are stops too. A stop's title is a template: {r} row, {w} weekend.
-export function road(s, ctx) {
-  const d = s.clock.day, out = [];
+export function road(s: State, ctx: Ctx) {
+  const d = s.clock.day, out: RoadStop[] = [];
   for (const b of beatsOfYear(ctx.modules, s.clock.year)) {
-    const meta = b.road ?? ROAD[b.id];
+    const meta = b.road ?? own(ROAD, b.id);
     if (!meta) continue;
     let day = atDay(s, b), est = false;
     if (day == null && b.est) { day = b.est(s) ?? null; est = day != null; }
-    out.push({ id: b.id, kind: 'beat', day, est, done: s.story.beats[b.id] !== undefined, title: meta.title, why: meta.why ?? null, icon: meta.icon ?? null });
+    out.push({ id: b.id, kind: 'beat', day, est, done: s.story.beats[b.id] !== undefined, title: meta.title, why: meta.why ?? null, icon: meta.icon });
   }
-  (s.patch?.rows || []).forEach((r, i) => {
+  s.patch.rows.forEach((r, i) => {
     // a scheduled row, or one that went in this morning (patch.dayStart sows scheduled rows before story.dayStart)
     const day = r.plan ? r.plan.day : r.plantedDay === d && s.clock.phase === 'grow' ? d : null;
     if (day == null) return;
@@ -1262,40 +1280,41 @@ export function road(s, ctx) {
     title: fill(ROAD_STOPS.weekend.title, { w: w.id }), why: null, icon: ROAD_STOPS.weekend.icon });
   out.push({ id: 'weighoff', kind: 'weighoff', day: WEIGHOFF, est: false, done: d > WEIGHOFF || ['halloween', 'winter'].includes(s.clock.phase),
     title: ROAD_STOPS.weighoff.title, why: null, icon: ROAD_STOPS.weighoff.icon });
-  return out.map((x, i) => [x, i]).sort((a, b) => (a[0].day ?? 1e9) - (b[0].day ?? 1e9) || a[1] - b[1]).map(([x]) => x);
+  return out.sort((a, b) => (a.day ?? 1e9) - (b.day ?? 1e9));   // stable: same-day stops keep their order
 }
 // The next stop not yet reached: the Next-stop chip's subject and its ⏭ target (dispatch clock/skip { to: stop.day }).
-export function nextStop(s, ctx) {
+export function nextStop(s: State, ctx: Ctx) {
   const d = s.clock.day;
-  return road(s, ctx).find((x) => !x.done && x.day != null && x.day >= d) || null;
+  return road(s, ctx).find((x): x is DatedStop => !x.done && x.day != null && x.day >= d) ?? null;
 }
 // A planned row went in this morning: the Road's stop is reached (Skip stops on it, game.js).
-function roadReached(s, ctx) {
-  if (s.clock.phase !== 'grow' || !(s.patch?.rows || []).some((r) => r.plantedDay === s.clock.day)) return;
+function roadReached(s: State, ctx: Ctx) {
+  if (s.clock.phase !== 'grow' || !s.patch.rows.some((r) => r.plantedDay === s.clock.day)) return;
   for (const x of road(s, ctx)) if (x.kind === 'sow' && x.day === s.clock.day) ctx.emit({ type: 'road', id: x.id, day: x.day });
 }
 
 // quiet(s, ctx): a quiet day the clock may hurry through (plan §2.3; the setting is off by default, rulings R10). Nothing
 // on screen or waiting (no goal, dialogue, card, close-up, queued moment or active pin), no alert since yesterday, and no
 // beat or Road stop due within T.road.quiet.lookahead days. The UI adds its own checks (no open sheet, no live pin).
-export function quiet(s, ctx) {
+export function quiet(s: State, ctx: Ctx) {
   const c = s.clock, st = s.story, d = c.day, la = T.road.quiet.lookahead;
   if (c.phase !== 'grow' || c.hands || st.goal || st.dialog.length || st.cards.length || st.moments.length) return false;
-  if (s.events?.active?.length || s.mischief?.pin || s.mischief?.visit) return false;
-  for (const a of Object.values(st.alerts || {})) if (a[0] === c.year && d - a[1] <= 1) return false;
+  if (s.events.active.length || s.mischief.pin || s.mischief.visit) return false;
+  for (const a of Object.values(st.alerts)) if (a[0] === c.year && d - a[1] <= 1) return false;
   for (const b of beatsOfYear(ctx.modules, c.year)) {
     if (st.beats[b.id] !== undefined) continue;
     const t = atDay(s, b);
     if ((t != null && t <= d + la) || b.when(s, ctx) || b.soon?.(s, ctx)) return false;
   }
-  if (st.receipts.length && st.receipts[0].due <= d + la) return false;
+  const r = st.receipts[0];
+  if (r && r.due <= d + la) return false;
   return !road(s, ctx).some((x) => !x.done && x.day != null && x.day <= d + la);
 }
 
 // ------------------------------------------------------------ [foundation] the needs lint (plan §3.1)
 // mentions(text) -> the unlocks a line leans on: unlock flags, or 'beat:<id>' for a lesson that unlocks nothing. A delight,
 // a poke or a Road title must never name a system the farm hasn't met: needsMet(s, mentions(text)) in the owner's tests.
-const MENTIONS = [
+const MENTIONS: [RegExp, string][] = [
   [/\bmarlene\b|\bfog\b|\bforecast/i, 'marlene'],
   [/\brows?\b|\bsow(ing|n)?\b|\bcrates?\b|\bplanting\b/i, 'patch'],
   [/\bthirsty\b|\bdroop|\bwater (the|your) (patch|rows?)\b/i, 'patchWater'],
@@ -1310,30 +1329,30 @@ const MENTIONS = [
   [/\britual|\blucky hat\b/i, 'rituals'],
   [/\bmildew\b/i, 'mildew'],
 ];
-export function mentions(text) {
-  const out = [];
+export function mentions(text: string) {
+  const out: string[] = [];
   for (const [re, need] of MENTIONS) if (re.test(String(text)) && !out.includes(need)) out.push(need);
   return out;
 }
-export const needsMet = (s, needs = []) => needs.every((n) => (n.startsWith('beat:') ? s.story.beats[n.slice(5)] !== undefined : !!s.unlocks[n]));
+export const needsMet = (s: State, needs: readonly string[] = []) => needs.every((n) => (n.startsWith('beat:') ? s.story.beats[n.slice(5)] !== undefined : !!s.unlocks[n]));
 
 // ------------------------------------------------------------ module
-const fail = (reason) => ({ ok: false, reason });
+const fail = (reason: string) => ({ ok: false, reason });
 export default {
   id: 'story',
-  init(s) {
+  init(s: State) {
     s.story = { dialog: [], cards: [], goal: null, beats: {}, lastIntro1x: null, log: [], replay: {}, seq: 0,
-      moments: [], receipts: [], receiptDay: null, said: {}, stamps: {}, alerts: {} };
+      moments: [], receipts: [], receiptDay: null, said: {}, heard: [], stamps: {}, alerts: {} };
   },
-  newYear(s, ctx) {
+  newYear(s: State, ctx) {
     s.story.lastIntro1x = null; s.story.lastChatter1x = null; s.story.goal = null; s.story.receiptDay = null;
     dropMoments(s, ctx);
     s.story.receipts = [];                           // a receipt belongs to its year's choice
   },
   dayStart(s, ctx) { goalLive(s, ctx); roadReached(s, ctx); receiptsDue(s, ctx); },
-  tick(s, ctx) { if (s.story.goal) goalLive(s, ctx); },
+  tick(s: State, ctx) { if (s.story.goal) goalLive(s, ctx); },
   dayEnd(s, ctx) { lapseDue(s, ctx); },
-  phase(s, ctx, from, to) {
+  phase(s: State, ctx, from, to) {
     if (from === 'newgame' && to === 'grow') log(s, ctx, 'arrive', 1, { farm: s.meta.farmName });
     if (to === 'weighoff' || to === 'winter') { lapseDue(s, ctx, true); dropMoments(s, ctx); }   // nothing from the season outlives it
   },
@@ -1342,18 +1361,20 @@ export default {
       const i = a.id ? s.story.dialog.findIndex((d) => d.id === a.id) : 0;
       if (i < 0 || !s.story.dialog.length) return fail('no such dialog');
       const [d] = s.story.dialog.splice(i, 1);
+      if (!d) return fail('no such dialog');
       ctx.emit({ type: 'dialogDone', id: d.id, beat: d.beat });
       return { ok: true };
     },
     'card/answer': (s, a, ctx) => {
       const i = s.story.cards.findIndex((c) => c.id === a.id);
       if (i < 0) return fail('no such card');
-      const c = s.story.cards[i], choices = c.data.choices;
+      const c = s.story.cards[i];
+      if (!c) return fail('no such card');
+      const choices = c.data.choices;
       const choice = a.choice ?? c.data.defaultChoice ?? choices?.[0]?.id;
       if (choices?.length && !c.data.free && !choices.some((ch) => ch.id === choice)) return fail('not a choice on this card');
       s.story.cards.splice(i, 1);
-      let r;
-      for (const m of ctx.modules) if (m.cards?.[c.kind]) { r = m.cards[c.kind](s, c, choice, ctx, a); break; }
+      const r = answerCard(s, c, choice, ctx, a);
       ctx.emit({ type: 'cardDone', id: c.id, kind: c.kind, choice });
       return { ok: true, ...(r || {}) };
     },
@@ -1366,4 +1387,4 @@ export default {
       return { ok: true };
     },
   },
-};
+} satisfies SimModule;

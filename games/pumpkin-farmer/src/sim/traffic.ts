@@ -32,6 +32,7 @@
 //   t: ticks it has waited to join the road off the spur ('sand') ; q: >= 0 while waiting in the fog to come in (its
 //   place in that line) ; bx, bz: its space on the sand
 import { ROAD } from './layout.js';
+import type { Car, Family, Season } from './state.js';
 import { T } from './tuning.js';
 import { round3 } from './util.js';
 
@@ -41,17 +42,28 @@ const BENDV = C.bend / TPS, SANDV = C.sand / TPS, BAYV = C.bay / TPS, BACKV = C.
 const HALF = C.length / 2, SPACE = C.length + C.gap, ASK = Math.round(C.ask * TPS);
 const { west: W, north: ZN } = ROAD;
 const SPACES = [ROAD.stops.patch, ROAD.stops.stand];   // the spaces on each side, front (east) first
-const stopG = (x) => x - W;
-const side = (c) => (c.r === 'stand' ? 1 : 0);         // 0 the patch's side, 1 the stand's
+const spaces = (sd: number): number[] => SPACES[sd] ?? [];
+const spaceX = (S: number[], i: number) => S[i] ?? 0;
+const stopG = (x: number) => x - W;
+const side = (c: Pick<Car, 'r'>) => (c.r === 'stand' ? 1 : 0);
+
+type Pt = [number, number];
+/** Where a car is on the road; see place(). */
+interface Place { g: number; ln: number; road: boolean; ask?: boolean }
+/** Someone on foot, by family id (the farmer is 0). */
+export interface Walker { id: number; x: number; z: number }
+const ORIGIN: Pt = [0, 0];         // 0 the patch's side, 1 the stand's
 
 // ------------------------------------------------------------ geometry
 // Each side: straight along the lane at z0 to x E, a left bend of radius R, then north at x E + R into the fog.
-const LANES = [[ROAD.z, ...ROAD.bend.patch], [ROAD.zStand, ...ROAD.bend.stand]].map(([z0, E, R]) => {
+const mkLane = (z0: number, [E, R]: Pt) => {
   const L1 = E - W, A = (Math.PI * R) / 2;
   return { z0, E, R, L1, A, X: E + R, ZB: z0 - R, MAIN: L1 + A + (z0 - R - ZN) };
-});
-function lanePose(sd, g) {
-  const L = LANES[sd];
+};
+const PATCH = mkLane(ROAD.z, ROAD.bend.patch), STAND = mkLane(ROAD.zStand, ROAD.bend.stand);
+const laneOf = (sd: number) => (sd === 1 ? STAND : PATCH);
+function lanePose(sd: number, g: number) {
+  const L = laneOf(sd);
   if (g <= L.L1) return { x: W + g, z: L.z0, yaw: 0 };
   if (g < L.L1 + L.A) { const t = (g - L.L1) / L.R; return { x: L.E + L.R * Math.sin(t), z: L.ZB + L.R * Math.cos(t), yaw: t }; }
   return { x: L.X, z: L.ZB - (g - L.L1 - L.A), yaw: Math.PI / 2 };
@@ -60,35 +72,37 @@ function lanePose(sd, g) {
 // BR) into a space, nose to the sea at x SX. Out: back out (tail to the south) until facing north on the spur, up it to
 // JZ, then a curve onto the patch's side partway round its bend (at angle JT).
 const SD = ROAD.sand, AT = SD.at, TS = SD.turn, SPX = AT + TS, BR = SD.bay, SX = SD.x, JZ = SD.join, JT = SD.joinAt;
-const P0 = LANES[0], G_SPUR = AT - W, TURN = (Math.PI * TS) / 2, SPZ = P0.z0 + TS;     // where the spur's straight starts
+const P0 = PATCH, G_SPUR = AT - W, TURN = (Math.PI * TS) / 2, SPZ = P0.z0 + TS;     // where the spur's straight starts
 const BAYARC = (Math.PI * BR) / 2, BAYIN = SX - SPX - BR, BACK = BAYIN + BAYARC;
 const G_JOIN = P0.L1 + P0.R * JT;                      // where a car off the spur joins the patch's side
 // while it's waiting to join (once it has asked) and joining, the patch's side stops short of the spur's mouth
 const G_J0 = SPX - 0.55 - HALF - W + SPACE;
-const TOK_G = stopG(ROAD.crossings.at(-1)[0]) - HALF;  // a beach-lot car waits for the spur short of the last crossing
+const TOK_G = stopG((ROAD.crossings.at(-1) ?? ORIGIN)[0]) - HALF;  // a beach-lot car waits for the spur short of the last crossing
 // the join: a curve from (SPX, JZ) heading north to the bend at JT, sampled once
 const JOIN = (() => {
-  const a = [SPX, JZ], d = lanePose(0, G_JOIN), b = [d.x, d.z], k = 0.7;
-  const c1 = [a[0], a[1] - k], c2 = [b[0] - Math.cos(JT) * k, b[1] + Math.sin(JT) * k], pts = [];
+  const a: Pt = [SPX, JZ], d = lanePose(0, G_JOIN), b: Pt = [d.x, d.z], k = 0.7;
+  const c1: Pt = [a[0], a[1] - k], c2: Pt = [b[0] - Math.cos(JT) * k, b[1] + Math.sin(JT) * k], pts: Pt[] = [];
   for (let i = 0; i <= 16; i++) {
-    const u = i / 16, m = 1 - u, f = [m * m * m, 3 * m * m * u, 3 * m * u * u, u * u * u];
-    pts.push([f[0] * a[0] + f[1] * c1[0] + f[2] * c2[0] + f[3] * b[0], f[0] * a[1] + f[1] * c1[1] + f[2] * c2[1] + f[3] * b[1]]);
+    const u = i / 16, m = 1 - u, f0 = m * m * m, f1 = 3 * m * m * u, f2 = 3 * m * u * u, f3 = u * u * u;
+    pts.push([f0 * a[0] + f1 * c1[0] + f2 * c2[0] + f3 * b[0], f0 * a[1] + f1 * c1[1] + f2 * c2[1] + f3 * b[1]]);
   }
   const cum = [0];
-  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
-  return { pts, cum, L: cum.at(-1) };
+  let prev = pts[0] ?? a, total = 0;
+  for (const p of pts.slice(1)) { total += Math.hypot(p[0] - prev[0], p[1] - prev[1]); cum.push(total); prev = p; }
+  return { pts, cum, L: total };
 })();
-function joinPose(d) {
+function joinPose(d: number) {
   const { pts, cum } = JOIN;
   let i = 1;
-  while (i < pts.length - 1 && cum[i] < d) i++;
-  const k = Math.min(1, Math.max(0, (d - cum[i - 1]) / (cum[i] - cum[i - 1]))), a = pts[i - 1], b = pts[i];
+  while (i < pts.length - 1 && (cum[i] ?? 0) < d) i++;
+  const c0 = cum[i - 1] ?? 0, c1 = cum[i] ?? 0, a = pts[i - 1] ?? ORIGIN, b = pts[i] ?? ORIGIN;
+  const k = Math.min(1, Math.max(0, (d - c0) / (c1 - c0)));
   return { x: a[0] + (b[0] - a[0]) * k, z: a[1] + (b[1] - a[1]) * k, yaw: Math.atan2(-(b[1] - a[1]), b[0] - a[0]) };
 }
-const upLen = (bz) => bz + BR - JZ;                    // up the spur from a space's mouth to where it waits to join
-const inLen = (bz) => TURN + (bz - BR - SPZ) + BAYARC + BAYIN;
+const upLen = (bz: number) => bz + BR - JZ;                    // up the spur from a space's mouth to where it waits to join
+const inLen = (bz: number) => TURN + (bz - BR - SPZ) + BAYARC + BAYIN;
 // into a space: the turn off the road, down the spur, the turn into the space, nose in
-function inPose(bz, d) {
+function inPose(bz: number, d: number) {
   if (d < TURN) { const u = d / TS; return { x: AT + TS * Math.sin(u), z: P0.z0 + TS - TS * Math.cos(u), yaw: -u }; }
   d -= TURN;
   const run = bz - BR - SPZ;
@@ -98,7 +112,7 @@ function inPose(bz, d) {
   return { x: SPX + BR + Math.min(d - BAYARC, BAYIN), z: bz, yaw: 0 };
 }
 // out of one: backing out (the car still faces the sea, then swings to face north), up the spur, the join
-function outPose(bz, d) {
+function outPose(bz: number, d: number) {
   if (d < BAYIN) return { x: SX - d, z: bz, yaw: 0 };
   d -= BAYIN;
   if (d < BAYARC) { const w = d / BR; return { x: SPX + BR - BR * Math.sin(w), z: bz + BR - BR * Math.cos(w), yaw: w }; }
@@ -109,14 +123,14 @@ function outPose(bz, d) {
   if (d < JOIN.L) return joinPose(d);
   return lanePose(0, G_JOIN + d - JOIN.L);
 }
-const joinS = (c) => round3(BACK + upLen(c.bz));       // where on its route a car off the sand waits to join
-export function routeLen(c) {
+const joinS = (c: Pick<Car, 'bz'>) => round3(BACK + upLen(c.bz));       // where on its route a car off the sand waits to join
+export function routeLen(c: Pick<Car, 'r' | 'bz'>) {
   if (c.r === 'beach') return G_SPUR + inLen(c.bz);
   if (c.r === 'sand') return joinS(c) + JOIN.L + P0.MAIN - G_JOIN;
-  return LANES[side(c)].MAIN;
+  return laneOf(side(c)).MAIN;
 }
 /** Where a car is at distance s along its route: { x, z, yaw } of its middle (+x is the nose; yaw as THREE's rotation.y). */
-export function pose(c, s) {
+export function pose(c: Pick<Car, 'r' | 'bz'>, s: number) {
   if (c.r === 'beach') return s <= G_SPUR ? lanePose(0, s) : inPose(c.bz, s - G_SPUR);
   if (c.r === 'sand') return outPose(c.bz, s);
   return lanePose(side(c), s);
@@ -125,7 +139,7 @@ export function pose(c, s) {
 // (g), and whether it's in the way there (road). A car turning onto the spur is until it's clear of the lane; one waiting
 // to join off it asks for its gap once it has waited a while (ask: cars that can still stop short of it do), and holds
 // it once it goes.
-function place(c) {
+function place(c: Pick<Car, 'r' | 's' | 't' | 'bz'>): Place {
   if (c.r === 'beach') {
     if (c.s <= G_SPUR + TURN * 0.6) return { g: Math.min(c.s, G_SPUR + 0.5), ln: 0, road: true };
     return { g: 0, ln: 2, road: false };
@@ -140,15 +154,15 @@ function place(c) {
   return { g: c.s, ln: side(c), road: true };
 }
 // the spur takes one car at a time: one on its way down it (from short of the last crossing) or coming out of it
-const onSpur = (c) => (c.r === 'beach' && c.k !== 'parked' && c.q < 0 && c.s > TOK_G) || (c.r === 'sand' && c.s > 0 && c.s < joinS(c) + JOIN.L);
+const onSpur = (c: Car) => (c.r === 'beach' && c.k !== 'parked' && c.q < 0 && c.s > TOK_G) || (c.r === 'sand' && c.s > 0 && c.s < joinS(c) + JOIN.L);
 
 // ------------------------------------------------------------ the tick
-const CROSS = ROAD.crossings.map(([a, b]) => [stopG(a) - HALF, stopG(b) + HALF]);
+const CROSS = ROAD.crossings.map(([a, b]): Pt => [stopG(a) - HALF, stopG(b) + HALF]);
 // the lane's width on the ground: anyone on foot between these is on it
 export const BAND0 = ROAD.zStand - 0.55, BAND1 = ROAD.z + 0.5;
-const XEND = Math.max(P0.E, LANES[1].E) + HALF;
+const XEND = Math.max(P0.E, STAND.E) + HALF;
 /** A car is coming at x on the lane: moving, and on it or about to be (too close to stop for someone stepping out). */
-export function coming(se, x) {
+export function coming(se: Season, x: number) {
   for (const c of se.cars) {
     if (c.q >= 0 || c.k === 'parked' || c.v < 0.05) continue;
     const p = pose(c, c.s);
@@ -164,31 +178,35 @@ export function coming(se, x) {
  * backed(car) when a car has backed out of its space on the sand, and ready(car) to ask whether a pick-up car waiting in
  * the fog should come in yet. Returns the cars that reached the end of their route this tick.
  */
-export function tick(se, walkers, atStop, backed, ready) {
-  const cars = se.cars, n = cars.length, done = [];
+export function tick(se: Season, walkers: Walker[], atStop: (c: Car) => void, backed: (c: Car) => void, ready: (c: Car, door?: boolean) => boolean): Car[] {
+  const cars = se.cars, n = cars.length, done: Car[] = [];
   // where everyone is (P[i] for cars[i]; null for cars in the fog line or parked on the sand)
-  const P = new Array(n);
-  let spur = null;
+  const P: (Place | null)[] = [];
+  let spur: Car | null = null;
   for (let i = 0; i < n; i++) {
     const c = cars[i];
-    P[i] = c.q < 0 && c.k !== 'parked' ? place(c) : null;
-    if (P[i] && onSpur(c)) spur = c;
+    if (!c) continue;
+    const pi = c.q < 0 && c.k !== 'parked' ? place(c) : null;
+    P[i] = pi;
+    if (pi && onSpur(c)) spur = c;
   }
   // the line in the fog: the first car for each side comes in once that side's mouth is clear (to pick up, the first
   // whose family is nearly ready)
   for (let sd = 0; sd < 2; sd++) {
     let head = -1, clear = true;
     for (let i = 0; i < n; i++) {
-      const c = cars[i];
-      if (c.q >= 0 && side(c) === sd && (head < 0 || c.q < cars[head].q) && (sd === 0 || ready(c))) head = i;
-      if (P[i] && P[i].ln === sd && P[i].g < SPACE) clear = false;
+      const c = cars[i], pi = P[i], h = cars[head];
+      if (!c) continue;
+      if (c.q >= 0 && side(c) === sd && (!h || c.q < h.q) && (sd === 0 || ready(c))) head = i;
+      if (pi && pi.ln === sd && pi.g < SPACE) clear = false;
     }
-    if (head >= 0 && clear) { const c = cars[head]; c.q = -1; c.s = 0; c.v = CRUISE; P[head] = place(c); }
+    const first = cars[head];
+    if (first && clear) { first.q = -1; first.s = 0; first.v = CRUISE; P[head] = place(first); }
   }
   assignStops(cars, P);
   for (let i = 0; i < n; i++) {
     const c = cars[i], p = P[i];
-    if (!p) continue;
+    if (!c || !p) continue;
     if (c.wait > 0) { c.wait--; c.v = 0; continue; }
     if (c.r === 'stand' && c.k === 'fetch' && ready(c, true)) { c.v = 0; continue; }   // its family's at the door
     if (c.r === 'sand' && c.s < joinS(c)) {              // out of its space and up the spur
@@ -202,7 +220,8 @@ export function tick(se, walkers, atStop, backed, ready) {
     let pp = p;
     if (c.r === 'sand' && c.s === joinS(c)) {            // waiting at the top of the spur for a gap
       if (!joinClear(c, cars, P)) { c.v = 0; c.t++; if (c.t === ASK) P[i] = place(c); continue; }
-      pp = P[i] = { g: G_J0, ln: 0, road: true };
+      pp = { g: G_J0, ln: 0, road: true };
+      P[i] = pp;
     }
     let free = room(c, pp, cars, P, walkers);
     const st = stopAhead(c, pp);
@@ -221,49 +240,50 @@ export function tick(se, walkers, atStop, backed, ready) {
   return done;
 }
 // The fastest step this tick from which a car can still brake to a stop within `free` (this step plus v²/2DEC after it).
-const brakeV = (free) => (free > 0 ? -DEC / 2 + Math.sqrt((DEC * DEC) / 4 + 2 * DEC * free) : 0);
+const brakeV = (free: number) => (free > 0 ? -DEC / 2 + Math.sqrt((DEC * DEC) / 4 + 2 * DEC * free) : 0);
 // How fast a car may go here: cruising on the lane, easing round the bend, a little slower up the beach, crawling on the
 // spur.
-function limit(c, p) {
+function limit(c: Car, p: Place) {
   if (p.ln === 2 || (c.r === 'beach' && c.s > G_SPUR)) return BAYV;
   if (c.r === 'sand' && c.s < joinS(c) + JOIN.L) return BAYV;
-  const L = LANES[side(c)], g = p.g;
+  const L = laneOf(side(c)), g = p.g;
   if (c.r === 'beach') return Math.min(CRUISE, Math.sqrt(BAYV * BAYV + 2 * DEC * Math.max(0, G_SPUR - g)));
   return g < L.L1 ? Math.min(CRUISE, Math.sqrt(BENDV * BENDV + 2 * DEC * (L.L1 - g))) : g < L.L1 + L.A ? BENDV : SANDV;
 }
 // The distance to this car's space, or (still waiting for one) to its side's front space: nobody who needs to stop
 // drives past the spaces.
-const wants = (c) => c.k === 'drop' || c.k === 'fetch';
-function stopAhead(c, p) {
-  const S = SPACES[side(c)];
-  if (!wants(c) || p.ln === 2 || p.g > stopG(S[0]) + 1e-3) return Infinity;
-  return stopG(c.slot >= 0 ? S[c.slot] : S[0]) - c.s;
+const wants = (c: Car) => c.k === 'drop' || c.k === 'fetch';
+function stopAhead(c: Car, p: Place) {
+  const S = spaces(side(c));
+  if (!wants(c) || p.ln === 2 || p.g > stopG(spaceX(S, 0)) + 1e-3) return Infinity;
+  return stopG(spaceX(S, c.slot >= 0 ? c.slot : 0)) - c.s;
 }
 // Spaces go to the cars that want one in the order they come up their side: the frontmost free space they can still
 // stop at, so the cars behind can get to theirs; or, dropping off with nobody behind, the nearest. A pick-up may wait a
 // while for its family, so one never takes a space with another car parked short of it.
-function assignStops(cars, P) {
+function assignStops(cars: Car[], P: (Place | null)[]) {
   for (let sd = 0; sd < 2; sd++) {
-    const S = SPACES[sd], free = S.map(() => true);
-    let want = null, last = Infinity;
+    const S = spaces(sd), free = S.map(() => true), want: Car[] = [];
+    let last = Infinity;
     for (let i = 0; i < cars.length; i++) {
-      const c = cars[i];
-      if (side(c) !== sd) continue;
+      const c = cars[i], pi = P[i];
+      if (!c || side(c) !== sd) continue;
       if (c.slot >= 0) free[c.slot] = false;
-      if (c.q >= 0 || (P[i] && P[i].ln === sd)) last = Math.min(last, c.q >= 0 ? -1 : P[i].g);
-      if (c.slot < 0 && wants(c) && P[i] && P[i].ln === sd && P[i].g <= stopG(S[0]) + 1e-3) (want ||= []).push(c);
+      if (c.q >= 0) last = Math.min(last, -1);
+      else if (pi && pi.ln === sd) last = Math.min(last, pi.g);
+      if (c.slot < 0 && wants(c) && pi && pi.ln === sd && pi.g <= stopG(spaceX(S, 0)) + 1e-3) want.push(c);
     }
     // picking up: a car waiting at the back space moves up to the front one when it comes free, so the next can pull in
     if (sd === 1) for (const c of cars) {
       if (side(c) !== 1 || c.slot < 1 || c.k !== 'fetch' || !free[c.slot - 1]) continue;
-      if (cars.some((o) => o !== c && side(o) === 1 && o.q < 0 && o.s > c.s && o.s < stopG(S[c.slot - 1]) + SPACE)) continue;   // nobody in the way
+      if (cars.some((o) => o !== c && side(o) === 1 && o.q < 0 && o.s > c.s && o.s < stopG(spaceX(S, c.slot - 1)) + SPACE)) continue;   // nobody in the way
       free[c.slot] = true; c.slot--; free[c.slot] = false;
     }
-    if (!want) continue;
+    if (!want.length) continue;
     want.sort((a, b) => b.s - a.s);
     for (const c of want) {
       // one it can stop at (and, picking up, get to)
-      const ok = (f, i) => f && stopG(S[i]) - c.s >= (c.v * c.v) / (2 * DEC) - 1e-3 && (sd === 0 || !free.some((g, m) => !g && S[m] < S[i]));
+      const ok = (f: boolean, i: number) => f && stopG(spaceX(S, i)) - c.s >= (c.v * c.v) / (2 * DEC) - 1e-3 && (sd === 0 || !free.some((g, m) => !g && spaceX(S, m) < spaceX(S, i)));
       const k = sd === 0 && c.s <= last ? free.findLastIndex(ok) : free.findIndex(ok);
       if (k < 0) break;
       c.slot = k; free[k] = false;
@@ -274,11 +294,11 @@ function assignStops(cars, P) {
 // who'd get there before it's in. Once it has asked (waited a while), it goes as soon as everyone coming has stopped
 // for it or gone by.
 const JOINT = Math.ceil(JOIN.L / BAYV) + 2;
-function joinClear(c, cars, P) {
+function joinClear(c: Car, cars: Car[], P: (Place | null)[]) {
   const asked = c.t >= ASK;
   for (let j = 0; j < cars.length; j++) {
     const q = P[j], o = cars[j];
-    if (!q || !q.road || q.ask || q.ln !== 0 || o === c || o.r === 'beach' || q.g >= G_JOIN + SPACE) continue;
+    if (!q || !o || !q.road || q.ask || q.ln !== 0 || o === c || o.r === 'beach' || q.g >= G_JOIN + SPACE) continue;
     if (q.g > G_J0 - SPACE + 0.01) return false;
     if (q.g + (asked ? o.v + (o.v * o.v) / (2 * DEC) : o.v * JOINT) > G_J0 - SPACE + 0.01) return false;
   }
@@ -286,17 +306,17 @@ function joinClear(c, cars, P) {
 }
 // How far a car may go before it must stop: behind the car ahead on its side, short of a crossing it can't get across,
 // short of anyone on foot on the road ahead.
-function room(c, p, cars, P, walkers) {
+function room(c: Car, p: Place, cars: Car[], P: (Place | null)[], walkers: Walker[]) {
   if (!p.road || p.ln === 2) return Infinity;           // on the spur: nothing else is there
-  let free = Infinity, lead = null;
+  let free = Infinity, lead: Car | null = null;
   for (let j = 0; j < cars.length; j++) {
-    const q = P[j];
-    if (!q || !q.road || q.ln !== p.ln || cars[j] === c || q.g <= p.g) continue;
+    const q = P[j], o = cars[j];
+    if (!q || !o || !q.road || q.ln !== p.ln || o === c || q.g <= p.g) continue;
     const d = q.g - p.g - SPACE;
     if (q.ask && d < (c.v * c.v) / (2 * DEC)) continue;   // too close to stop for a car waiting to join: go on by
-    if (d < free) { free = d; lead = cars[j]; }
+    if (d < free) { free = d; lead = o; }
   }
-  const L = LANES[p.ln];
+  const L = laneOf(p.ln);
   // keep the crossings clear: don't drive onto one without room to get off it again (behind a car that has stopped)
   if (p.g < L.L1 && !(lead && lead.v > 0.1 && lead.wait === 0)) {
     for (const [a, b] of CROSS) {
@@ -319,20 +339,20 @@ function room(c, p, cars, P, walkers) {
  * A new car for a family: r 'patch' or 'beach' to drop them off, 'stand' to pick them up. at: 'fog' (joins the line in
  * Marlene) or 'stop' (already standing at its side's last space, by the little gate: scripted).
  */
-export function addCar(se, f, k, r, at = 'fog', spot = null) {
-  const c = { id: ++se.carSeq, fam: f.id, k, r, s: 0, v: 0, slot: -1, wait: 0, t: 0, q: -1, bx: spot?.x ?? 0, bz: spot?.z ?? 0 };
+export function addCar(se: Season, f: Family, k: string, r: string, at = 'fog', spot: { x: number; z: number } | null = null) {
+  const c: Car = { id: ++se.carSeq, fam: f.id, k, r, s: 0, v: 0, slot: -1, wait: 0, t: 0, q: -1, bx: spot?.x ?? 0, bz: spot?.z ?? 0 };
   if (at === 'fog') c.q = ++se.fogSeq;
-  else { const S = SPACES[side(c)]; c.slot = S.length - 1; c.s = stopG(S[c.slot]); }
+  else { const S = spaces(side(c)); c.slot = S.length - 1; c.s = stopG(spaceX(S, c.slot)); }
   se.cars.push(c);
   return c;
 }
 /** Where a car is, rounded: a riding family is carried along with it. */
-export function carPos(c) { const p = pose(c, c.s); return { x: round3(p.x), z: round3(p.z) }; }
+export function carPos(c: Car) { const p = pose(c, c.s); return { x: round3(p.x), z: round3(p.z) }; }
 /** A space on the sand is taken while a car is on its way to it, in it, or still backing out of it. */
-export const holdsSpace = (c) => c.r === 'beach' || (c.r === 'sand' && c.s < BACK);
+export const holdsSpace = (c: Car) => c.r === 'beach' || (c.r === 'sand' && c.s < BACK);
 /** A pick-up car within a few steps of the pick-up (at its space, or waiting its turn): its family can walk to it. */
-export const nearPickup = (c) => c.s >= stopG(ROAD.line);
+export const nearPickup = (c: Car) => c.s >= stopG(ROAD.line);
 /** The verge-side door of a pick-up car where it is now. */
-export const doorOf = (c) => ({ x: round3(W + c.s - 0.3), z: BAND0 - 0.1 });
+export const doorOf = (c: Car) => ({ x: round3(W + c.s - 0.3), z: BAND0 - 0.1 });
 /** Where a family gets out (the patch's side) or in (the stand's side) of a car standing at space k on its side. */
-export const door = (r, k) => (r === 'stand' ? { x: SPACES[1][k] - 0.3, z: BAND0 - 0.1 } : { x: SPACES[0][k] + 0.3, z: BAND1 + 0.1 });
+export const door = (r: string, k: number) => (r === 'stand' ? { x: spaceX(spaces(1), k) - 0.3, z: BAND0 - 0.1 } : { x: spaceX(spaces(0), k) + 0.3, z: BAND1 + 0.1 });

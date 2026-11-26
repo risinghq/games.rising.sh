@@ -1,3 +1,5 @@
+import type { State } from './types.js';
+
 // [Track A] The visitors' lines and the "never the same line twice" pools (plan §3.1, §3.2, §3.3, §8.4; rulings R5, R15).
 // Every line is at most 110 characters with typical values filled in (tests/sim/dropins.test.js lints them), and each
 // voice keeps its tic: Gran "sweet pea", Hal "Cove!" and "Awooo!", Old Moss dozes off ("... zzz."), Edna shouts and
@@ -163,22 +165,22 @@ export const MOSS = {
 };
 // Old Moss notices the farm (plan §3.1: 12 lines built from its state). Each entry's when(s) says whether it is true today;
 // fresh() only offers the ones that are.
-const seenThisYear = (s, id) => (s.mischief?.met?.[id]?.y ?? 0) === s.clock.year;
+const seenThisYear = (s: State, id: string) => (s.mischief?.met?.[id]?.y ?? 0) === s.clock.year;
 export const MOSS_NOTICE = [
-  { t: 'Your bees were out this week. Bees know things... zzz.', when: (s) => !!s.unlocks.marlene && [1, 2, 3].some((k) => (s.weather.days[s.clock.day - k]?.f ?? 1) < 0.6) },
-  { t: 'Pea soup today. Good day for seals... and for napping... zzz.', when: (s) => !!s.unlocks.marlene && s.weather.f >= 0.82 },
-  { t: 'That seal likes you. Seals like... nobody.', when: (s) => seenThisYear(s, 'seal_haulout') },
-  { t: "Somebody's been eating the bramble. Goats are... a choice.", when: (s) => Object.values(s.mischief?.pamela?.goatDays || {}).some((n) => n > 0) },
-  { t: 'That possum in your row... my niece. Plays dead better than anyone... zzz.', when: (s) => seenThisYear(s, 'possum_nap') },
-  { t: '{name}... good name. Strong name. Heavy name... zzz.', when: (s) => !!s.giant?.name },
-  { t: "She's thinking about flowers. Don't rush her.", when: (s) => s.giant?.transplantDay != null && s.giant?.setDay == null },
-  { t: "Lot of rows going in. Your gran's going to need a bigger stand... zzz.", when: (s) => (s.patch?.rows || []).filter((r) => r.plantedDay != null).length >= 3 },
-  { t: 'Bare rows... bare rows make me sad. Plant something... anything... zzz.', when: (s) => !!s.unlocks.patch && (s.patch?.rows || []).every((r) => r.plantedDay == null && !r.plan) },
-  { t: "She's drinking her kelp. Good girl. I can tell... zzz.", when: (s) => s.giant?.feed === 'kelp' || s.giant?.feed === 'both' },
-  { t: "No kelp? She'll manage. Kelp's a habit... a good one... zzz.", when: (s) => !!s.unlocks.feed && (s.giant?.feed ?? 'none') === 'none' },
-  { t: "Marlene's off somewhere sunny... she'll be back. She always is.", when: (s) => !!s.unlocks.marlene && s.weather.f < 0.25 },
-  { t: 'Skunked corner... weighs honest. Old saying. I made it up.', when: (s) => (s.mischief?.skunkedUntil ?? 0) > s.clock.day },
-  { t: 'The otter waved at me once. I waved back. We\'re close now... zzz.', when: (s) => seenThisYear(s, 'otter_look') },
+  { t: 'Your bees were out this week. Bees know things... zzz.', when: (s: State) => !!s.unlocks.marlene && [1, 2, 3].some((k) => (s.weather.days[s.clock.day - k]?.f ?? 1) < 0.6) },
+  { t: 'Pea soup today. Good day for seals... and for napping... zzz.', when: (s: State) => !!s.unlocks.marlene && s.weather.f >= 0.82 },
+  { t: 'That seal likes you. Seals like... nobody.', when: (s: State) => seenThisYear(s, 'seal_haulout') },
+  { t: "Somebody's been eating the bramble. Goats are... a choice.", when: (s: State) => Object.values(s.mischief?.pamela?.goatDays || {}).some((n) => n > 0) },
+  { t: 'That possum in your row... my niece. Plays dead better than anyone... zzz.', when: (s: State) => seenThisYear(s, 'possum_nap') },
+  { t: '{name}... good name. Strong name. Heavy name... zzz.', when: (s: State) => !!s.giant?.name },
+  { t: "She's thinking about flowers. Don't rush her.", when: (s: State) => s.giant?.transplantDay != null && s.giant?.setDay == null },
+  { t: "Lot of rows going in. Your gran's going to need a bigger stand... zzz.", when: (s: State) => (s.patch?.rows || []).filter((r) => r.plantedDay != null).length >= 3 },
+  { t: 'Bare rows... bare rows make me sad. Plant something... anything... zzz.', when: (s: State) => !!s.unlocks.patch && (s.patch?.rows || []).every((r) => r.plantedDay == null && !r.plan) },
+  { t: "She's drinking her kelp. Good girl. I can tell... zzz.", when: (s: State) => s.giant?.feed === 'kelp' || s.giant?.feed === 'both' },
+  { t: "No kelp? She'll manage. Kelp's a habit... a good one... zzz.", when: (s: State) => !!s.unlocks.feed && (s.giant?.feed ?? 'none') === 'none' },
+  { t: "Marlene's off somewhere sunny... she'll be back. She always is.", when: (s: State) => !!s.unlocks.marlene && s.weather.f < 0.25 },
+  { t: 'Skunked corner... weighs honest. Old saying. I made it up.', when: (s: State) => (s.mischief?.skunkedUntil ?? 0) > s.clock.day },
+  { t: 'The otter waved at me once. I waved back. We\'re close now... zzz.', when: (s: State) => seenThisYear(s, 'otter_look') },
 ];
 
 // ------------------------------------------------------------ Hal's heat lines (weather.js, events.js heat_wave)
@@ -186,11 +188,11 @@ export const MOSS_NOTICE = [
 export const HAL = {
   heatToday: [
     { t: "It's a scorcher inland and Marlene packed her bags. Shade your sweethearts! Awooo!" },
-    { t: "Marlene's gone to Reno, Cove. Didn't say goodbye. Sails up, hats on. Awooo!", when: (s) => !!s.unlocks.shade },
-    { t: "Heat wave number {n}! Marlene's not answering her phone. Leave a message after the howl. Awooo!", when: (s) => heatCount(s) >= 2 },
+    { t: "Marlene's gone to Reno, Cove. Didn't say goodbye. Sails up, hats on. Awooo!", when: (s: State) => !!s.unlocks.shade },
+    { t: "Heat wave number {n}! Marlene's not answering her phone. Leave a message after the howl. Awooo!", when: (s: State) => heatCount(s) >= 2 },
     { t: "No fog, folks. Repeat: NO FOG. This is not a drill. Well. It's a little bit a drill." },
-    { t: "Hot one, Cove! I see a sail up in Grandpa's corner. Smart cookie. Awooo!", when: (s) => !!s.unlocks.shade && !!s.giant?.shade },
-    { t: "Scorcher, Cove! {name}'s out there with no hat. Just saying. Awooo!", when: (s) => !!s.unlocks.shade && !s.giant?.shade && !!s.giant?.name },
+    { t: "Hot one, Cove! I see a sail up in Grandpa's corner. Smart cookie. Awooo!", when: (s: State) => !!s.unlocks.shade && !!s.giant?.shade },
+    { t: "Scorcher, Cove! {name}'s out there with no hat. Just saying. Awooo!", when: (s: State) => !!s.unlocks.shade && !s.giant?.shade && !!s.giant?.name },
     { t: "The valley's frying, Cove. Marlene's on a beach somewhere. Probably ours. Awooo!" },
     { t: 'Ninety-eight on the ridge and climbing! Water your pumpkins, then water yourselves. Awooo!' },
     { t: 'Hot enough to fry an egg on a mailbox, Cove. Please do not. Awooo!' },
@@ -198,15 +200,15 @@ export const HAL = {
   ],
   heatTomorrow: [
     'Heat over the hill tomorrow! Put a hat on anything you love.',
-    { t: "Valley's cooking tomorrow, Cove. Marlene's packing. Sails at the ready.", when: (s) => !!s.unlocks.shade },
+    { t: "Valley's cooking tomorrow, Cove. Marlene's packing. Sails at the ready.", when: (s: State) => !!s.unlocks.shade },
     "Tomorrow: hot. Tonight: suspiciously nice. Don't trust it. Awooo!",
     'My ears are hot, and my ears are never wrong. Mostly never. Heat tomorrow!',
     "Heat's coming over the ridge tomorrow, Cove. Marlene's already got her sunglasses on.",
-    { t: 'Big heat tomorrow! Raise your sails tonight and sleep like a baby. A hot baby. Awooo!', when: (s) => !!s.unlocks.shade },
+    { t: 'Big heat tomorrow! Raise your sails tonight and sleep like a baby. A hot baby. Awooo!', when: (s: State) => !!s.unlocks.shade },
   ],
 };
 // how many heat waves have started this year (today's included)
-export function heatCount(s) {
+export function heatCount(s: State) {
   const ds = s.weather?.days || [];
   let n = 0;
   for (let d = 0; d <= Math.min(s.clock.day, ds.length - 1); d++) if (ds[d]?.heat && !ds[d - 1]?.heat) n++;
@@ -223,7 +225,7 @@ export const EDNA = {
     '+{lb} lb. The tape SQUEAKED.',
     '+{lb} lb in a day! Correction: in a NIGHT. She grows while you sleep.',
     '+{lb} lb! THE CRIER IS OUT OF EXCLAMATION MARKS. Correction: we found one.',
-    { t: "+{lb} lb overnight. That's a whole Biscuit. Correction: most of a Biscuit.", when: (s) => (s.giant?.lastRecord?.lb ?? 0) >= 20 },
-    { t: '+{lb} lb overnight. {NAME} IS NOT MESSING AROUND.', when: (s) => (s.giant?.lastRecord?.lb ?? 0) >= 15 },
+    { t: "+{lb} lb overnight. That's a whole Biscuit. Correction: most of a Biscuit.", when: (s: State) => (s.giant?.lastRecord?.lb ?? 0) >= 20 },
+    { t: '+{lb} lb overnight. {NAME} IS NOT MESSING AROUND.', when: (s: State) => (s.giant?.lastRecord?.lb ?? 0) >= 15 },
   ],
 };

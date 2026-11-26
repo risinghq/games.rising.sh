@@ -18,9 +18,10 @@ import * as pokes from './pokes.js';
 import * as crawl from './crawl.js';
 import * as story from './story.js';
 import * as events from './events.js';
+import type { SimModule } from './types.js';
 
 // Namespaces by id, for ctx.mod(id) (named helper exports such as economy.has or events.isActive).
 export const NS = { weather, economy, patch, genetics, giant, season, weighoff, winter, firsts, mischief, pokes, crawl, story, events };
-export const MODULES = Object.values(NS).map((ns) => ns.default);
+export const MODULES: readonly SimModule[] = Object.values(NS).map((ns) => ns.default);
 for (const [id, ns] of Object.entries(NS)) if (ns.default.id !== id) throw new Error(`modules: ${id} exports id ${ns.default.id}`);
 export default MODULES;

@@ -33,31 +33,34 @@ import { T } from './tuning.js';
 import { dayOf, monthOf } from './calendar.js';
 import { rowZ, aisleZ, MISCHIEF_ENTRY } from './layout.js';
 import { makeRng, next, weighted } from './rng.js';
-import { hash32, fill } from './util.js';
+import { hash32, fill, own } from './util.js';
 import { catalogue, fireNow, slotNear } from './events.js';
 import { line, fresh, quietForChatter } from './story.js';
 import { hurt, bugSpot, yieldOf } from './patch.js';
 import { addScar, alive, tipDue, tipDoze } from './giant.js';
 import { find } from './pokes.js';
 import { LINES as ML, COATS, COAT_WORDS, FRACTIONS } from './lines-mischief.js';
+import type { SimModule, State, Ctx, Card, Policy, DirectorEvent, DelightLook, FreshEntry } from './types.js';
+import type { WeatherForecast, Mischief, MischiefPamelaVisit, MischiefVisit, PatchRow } from './state.js';
 
 const M = T.mischief, PM = M.pamela, SPOT = MISCHIEF_ENTRY.spots;
-const grows = (s) => s.clock.phase === 'grow';
-const inMonths = (s, months) => months.includes(monthOf(s.clock.day));
-const yr = (arr, s) => arr[Math.min(s.clock.year, arr.length) - 1];
+const grows = (s: State) => s.clock.phase === 'grow';
+const inMonths = (s: State, months: readonly string[]) => months.includes(monthOf(s.clock.day));
+const yr = <V>(arr: readonly V[], s: State): V | undefined => arr[Math.min(s.clock.year, arr.length) - 1];
 // keyed dice (a hash of seed, year, day and what for): visitors never move a stream, so the farm under them plays the same
-const u = (s, ...k) => next(makeRng(hash32(s.seed, s.clock.year, s.clock.day, 'mischief', ...k)));
-const keyed = (s, ...k) => makeRng(hash32(s.seed, s.clock.year, s.clock.day, 'mischief', ...k));
-const say = (s, ctx, key, list, rng = keyed(s, key)) => line(s, fresh(s, rng, key, list));
-const toast = (ctx, text, icon = 'sparkle', cls = 'event') => ctx.emit({ type: 'toast', text, cls, icon });
-const metThisYear = (s, id) => s.mischief.met[id]?.y === s.clock.year;
-function meet(s, id) { const m = (s.mischief.met[id] ||= { y: 0, n: 0, first: s.clock.year }); m.y = s.clock.year; m.n++; return m.n === 1; }
-const rowsOf = (s) => s.patch?.rows || [];
-const growingRow = (row) => row?.open && row.plantedDay != null && ['sprouts', 'vines', 'flowers', 'green'].includes(row.stage);
-const at = (x, z, y = 0.6) => ({ x, y, z });
+const u = (s: State, ...k: string[]) => next(makeRng(hash32(s.seed, s.clock.year, s.clock.day, 'mischief', ...k)));
+const keyed = (s: State, ...k: string[]) => makeRng(hash32(s.seed, s.clock.year, s.clock.day, 'mischief', ...k));
+const say = (s: State, _ctx: Ctx, key: string, list: readonly FreshEntry[], rng = keyed(s, key)) => line(s, fresh(s, rng, key, list) ?? '');
+const toast = (ctx: Ctx, text: string, icon = 'sparkle', cls = 'event') => ctx.emit({ type: 'toast', text, cls, icon });
+function meet(s: State, id: string) { const m = (s.mischief.met[id] ||= { y: 0, n: 0, first: s.clock.year }); m.y = s.clock.year; m.n++; return m.n === 1; }
+const rowsOf = (s: State) => s.patch?.rows || [];
+const growingRow = (row: PatchRow | undefined): boolean => !!row && row.open && row.plantedDay != null && ['sprouts', 'vines', 'flowers', 'green'].includes(row.stage);
+const growingIdx = (s: State): number[] => rowsOf(s).flatMap((r, i) => (growingRow(r) ? [i] : []));
+const bugsOf = (s: State, i: number) => rowsOf(s)[i]?.bugs ?? 0;
+const at = (x: number, z: number, y = 0.6) => ({ x, y, z });
 
 // The visitor leaves (her own way, or startled): the ✦ goes with her if it is still up (she was seen, not met).
-function endVisit(s, ctx, why, text) {
+function endVisit(s: State, ctx: Ctx, why: string, text?: string) {
   const v = s.mischief.visit;
   if (!v) return;
   s.mischief.visit = null;
@@ -67,8 +70,8 @@ function endVisit(s, ctx, why, text) {
 }
 
 // ------------------------------------------------------------ the visitors (delights in the lane: events.js)
-const visitor = (o) => ({ cls: 'delight', per: 'day', visit: true, ...o });
-const EVENTS = [
+const visitor = (o: Omit<DirectorEvent, 'cls' | 'per' | 'visit'>): DirectorEvent => ({ cls: 'delight', per: 'day', visit: true, ...o });
+const EVENTS: DirectorEvent[] = [
   // Biscuit's dig (slot A in year 1, Apr 7-12): Grandpa's old biscuit tin of notes (rulings R15). He digs on a dry morning,
   // or the morning after rain when the ground is soft (not in the rain itself: that keeps him on the porch; the slot's
   // last chance doesn't wait). Years 2+: now and then in spring he digs up something silly (the wider finds pool is Wave 2).
@@ -78,7 +81,7 @@ const EVENTS = [
     base: (s) => grows(s) && (s.clock.year === 1 || inMonths(s, M.dig.months)),
     rate: (s) => (s.clock.year === 1 ? 0 : M.dig.rate),
     cause: (s) => digCause(s),
-    text: (s) => ML.dig.arrive,
+    text: () => ML.dig.arrive,
     fire(s) {
       const p = SPOT.bramble;
       s.mischief.visit = { id: 'biscuit_dig', x: p.x, z: p.z, day: s.clock.day, tin: s.clock.year === 1 && !s.mischief.met.biscuit_dig };
@@ -122,7 +125,7 @@ const EVENTS = [
       if (!v?.coat) return {};
       const first = !s.mischief.coats.includes(v.coat);
       if (first) s.mischief.coats.push(v.coat);
-      const coat = COAT_WORDS[v.coat] || v.coat;
+      const coat = own(COAT_WORDS, v.coat) ?? v.coat;
       return { caption: fill(first ? ML.seal.met : ML.seal.again, { coat, n: s.mischief.coats.length }) };
     },
   }),
@@ -140,7 +143,7 @@ const EVENTS = [
       meet(s, 'otter_look');
       return { at: at(p.x, p.z, -0.2), label: 'An otter' };
     },
-    look(s, ctx) { const v = s.mischief.visit; if (v) v.until = s.clock.day + 1; return { caption: ML.otter.wave }; },
+    look(s) { const v = s.mischief.visit; if (v) v.until = s.clock.day + 1; return { caption: ML.otter.wave }; },
     leftAlone(s, ctx) { endVisit(s, ctx, 'gone', ML.otter.leave); },
   }),
   // The possum plays dead (plan §3.2; rulings R5): a grey day, a planted row (the buggiest one). Year 1: no bubble; years
@@ -163,7 +166,7 @@ const EVENTS = [
     },
     look(s, ctx) {
       const v = s.mischief.visit;
-      if (s.clock.year > 1 && v?.row != null) { possumCard(s, ctx, v); return {}; }
+      if (s.clock.year > 1 && v?.row != null) { possumCard(s, ctx, v, v.row); return {}; }
       return { dialog: ctx.say('possumMom', [say(s, ctx, 'possum.dead', ML.possum.dead)], { pause: true }) };
     },
   }),
@@ -208,46 +211,51 @@ const EVENTS = [
 ];
 
 // ------------------------------------------------------------ Biscuit's dig
-function digCause(s) {
+function digCause(s: State) {
   if (s.weather.rain) return null;
   if ((s.weather.days[s.clock.day - 1]?.rain)) return 'soft';
   return s.weather.f < M.dig.dryF ? 'dry' : null;
 }
 
 // ------------------------------------------------------------ the seal
-function sealCoat(s) {
+function sealCoat(s: State) {
   const met = new Set(s.mischief.coats);
-  return weighted(keyed(s, 'coat'), COATS.map((c) => [c, met.has(c) ? 1 : M.seal.newCoat]));
+  return weighted(keyed(s, 'coat'), COATS.map((c) => [c, met.has(c) ? 1 : M.seal.newCoat] satisfies [string, number]));
 }
-function sealSpot(s) {
+interface SealSpot { kind: string; x: number; z: number; row?: number }
+function sealSpot(s: State): SealSpot {
   const g = s.giant;
   if (g && !g.shade && alive(g) && s.unlocks.patch && u(s, 'sealGiant') < 0.35) return { kind: 'giant', ...SPOT.giantSide };
-  const rows = rowsOf(s).map((r, i) => [r, i]).filter(([r]) => growingRow(r));
-  if (rows.length && s.unlocks.patch && u(s, 'sealRow') < 0.5) { const [, i] = rows[Math.floor(u(s, 'sealRowI') * rows.length)]; return { kind: 'row', row: i, x: 6.0, z: aisleZ(i) + 0.1 }; }
+  const rows = growingIdx(s);
+  if (rows.length && s.unlocks.patch && u(s, 'sealRow') < 0.5) {
+    const i = rows[Math.floor(u(s, 'sealRowI') * rows.length)];
+    if (i != null) return { kind: 'row', row: i, x: 6.0, z: aisleZ(i) + 0.1 };
+  }
   return { kind: 'beach', ...SPOT.beach };
 }
-function sealText(s) {
+function sealText(s: State) {
   const v = s.mischief.visit;
-  if (v?.spot === 'row') return fill(ML.seal.row, { r: v.row + 1 });
+  if (v?.spot === 'row' && v.row != null) return fill(ML.seal.row, { r: v.row + 1 });
   return v?.spot === 'giant' ? ML.seal.giant : ML.seal.beach;
 }
 // she stays at least stay[0] days, then leaves the first morning Marlene lifts (f < liftF), and at most stay[1] days
-function sealDay(s, ctx, v) {
+function sealDay(s: State, ctx: Ctx, v: MischiefVisit) {
   const n = s.clock.day - v.day;
-  if ((n >= M.seal.stay[0] && s.weather.f < M.seal.liftF && !s.weather.rain) || n >= M.seal.stay[1]) endVisit(s, ctx, 'lift', ML.seal.leave);
+  const [minStay, maxStay] = M.seal.stay;
+  if ((n >= minStay && s.weather.f < M.seal.liftF && !s.weather.rain) || n >= maxStay) endVisit(s, ctx, 'lift', ML.seal.leave);
 }
 
 // ------------------------------------------------------------ the possum
 // year 1: her first visit is slot E's (Jul 9-11); years 2+: any grey day
-const possumReady = (s) => s.clock.year > 1 || s.clock.day >= dayOf(T.lane.y1.slots.E[0][0]);
-function possumRow(s) {
-  const rows = rowsOf(s).map((r, i) => [r, i]).filter(([r]) => growingRow(r));
+const possumReady = (s: State) => s.clock.year > 1 || s.clock.day >= dayOf(T.lane.y1.slots.E[0][0]);
+function possumRow(s: State): number | null {
+  const rows = growingIdx(s);
   if (!rows.length) return null;
-  const buggy = rows.filter(([r]) => r.bugs > 0).sort((a, b) => b[0].bugs - a[0].bugs);
-  return buggy.length ? buggy[0][1] : rows[Math.floor(u(s, 'possumRow') * rows.length)][1];
+  const buggy = rows.filter((i) => bugsOf(s, i) > 0).sort((a, b) => bugsOf(s, b) - bugsOf(s, a));
+  return buggy[0] ?? rows[Math.floor(u(s, 'possumRow') * rows.length)] ?? null;
 }
 // While she rests (bugs unlocked): her joeys herd that row's bugs off and no cluster starts there for shieldDays.
-function shield(s, ctx) {
+function shield(s: State, ctx: Ctx) {
   const v = s.mischief.visit;
   if (v?.id !== 'possum_nap' || !v.rest || v.row == null || !(s.unlocks.bugs || s.clock.year > 1)) return;
   const row = rowsOf(s)[v.row];
@@ -259,13 +267,13 @@ function shield(s, ctx) {
     if (row.bugs <= 0) ctx.emit({ type: 'patch/bugsCleared', row: v.row, by: 'possum' });
   }
 }
-function possumCard(s, ctx, v) {
-  const bugs = !!(s.unlocks.bugs || s.clock.year > 1), r = v.row + 1;
-  ctx.card('mischief', { kind: 'possum', title: fill(ML.possum.title, { r }), defaultChoice: 'rest', at: at(v.x, v.z, 0.5),
+function possumCard(s: State, ctx: Ctx, v: MischiefVisit, row: number) {
+  const bugs = !!(s.unlocks.bugs || s.clock.year > 1), r = row + 1;
+  ctx.card({ kind: 'mischief', data: { kind: 'possum', title: fill(ML.possum.title, { r }), defaultChoice: 'rest', at: at(v.x, v.z, 0.5),
     choices: [{ id: 'rest', label: ML.possum.rest, sub: fill(bugs ? ML.possum.restSubBugs : ML.possum.restSub, { r }) },
-      { id: 'ask', label: ML.possum.ask, sub: fill(ML.possum.askSub, { n: M.possum.coupon }) }] });
+      { id: 'ask', label: ML.possum.ask, sub: fill(ML.possum.askSub, { n: M.possum.coupon }) }] } });
 }
-function possumAnswer(s, ctx, choice) {
+function possumAnswer(s: State, ctx: Ctx, choice: string) {
   const v = s.mischief.visit;
   if (v?.id !== 'possum_nap') return;
   if (choice === 'ask') {
@@ -280,7 +288,7 @@ function possumAnswer(s, ctx, choice) {
 }
 
 // ------------------------------------------------------------ the skunks
-function skunkStartle(s, ctx) {
+function skunkStartle(s: State, ctx: Ctx) {
   const v = s.mischief.visit;
   if (v?.id !== 'skunk_shade') return false;
   s.mischief.skunkedUntil = s.clock.day + M.skunks.skunkedDays;
@@ -292,21 +300,21 @@ function skunkStartle(s, ctx) {
 }
 
 // ------------------------------------------------------------ Pamela
-const pamelaFrom = (s) => dayOf(yr(PM.from, s));
-function pamelaFree(s) {
+const pamelaFrom = (s: State) => { const f = yr(PM.from, s); return f === undefined ? Infinity : dayOf(f); };
+function pamelaFree(s: State) {
   const P = s.mischief.pamela;
   return grows(s) && !P.visit && s.clock.day >= pamelaFrom(s) && s.clock.day >= (P.fullUntil || 0) && pamelaSpots(s).length > 0;
 }
 // the lowest bramble row (Row 5 in year 1, then Row 6 once Row 5 is bought...), while it still has bramble to eat
-function brambleRow(s) {
-  const rows = rowsOf(s);
-  for (let r = 0; r < rows.length; r++) if (!rows[r].open && (s.mischief.pamela.goatDays[r] || 0) < cutDays()) return r;
+function brambleRow(s: State) {
+  for (const [r, row] of rowsOf(s).entries()) if (!row.open && (s.mischief.pamela.goatDays[r] || 0) < cutDays()) return r;
   return null;
 }
 const cutDays = () => Math.ceil(PM.discountCap / PM.discountPerDay);
 // The spots she can pick right now, weighted (plan §3.3). Year 1: only the bramble and the washing line (rulings R5, R16).
-function pamelaSpots(s) {
-  const W = PM.weights, out = [], b = brambleRow(s), y1 = s.clock.year === 1;
+interface PamelaSpot { kind: 'bramble' | 'washing' | 'row' | 'giant'; row?: number; drift?: number | null }
+function pamelaSpots(s: State): (readonly [PamelaSpot, number])[] {
+  const W = PM.weights, out: (readonly [PamelaSpot, number])[] = [], b = brambleRow(s), y1 = s.clock.year === 1;
   if (b != null) out.push([{ kind: 'bramble', row: b }, W.bramble]);
   if (!s.mischief.pamela.shawl) out.push([{ kind: 'washing' }, W.washing]);
   if (y1) return out;
@@ -320,45 +328,48 @@ function pamelaSpots(s) {
   }
   return out;
 }
-function pamelaSpot(s) {
+function pamelaSpot(s: State): PamelaSpot {
   const P = s.mischief.pamela, list = pamelaSpots(s);
+  const washing: PamelaSpot = { kind: 'washing' };
   // her first escape of year 1 is slot C's, into the bramble (plan §3.3)
-  let spot = s.clock.year === 1 && P.escapes === 0 ? list.find(([x]) => x.kind === 'bramble')?.[0] : null;
-  spot ||= weighted(keyed(s, 'pamelaSpot'), list) || { kind: 'washing' };
+  let spot: PamelaSpot | undefined = s.clock.year === 1 && P.escapes === 0 ? list.find(([x]) => x.kind === 'bramble')?.[0] : undefined;
+  spot ??= weighted(keyed(s, 'pamelaSpot'), list) ?? washing;
   // years 2+: a planted row next to the bramble she's in may tempt her (announced up front in the bubble)
-  if (spot.kind === 'bramble' && s.clock.year > 1) { const n = spot.row - 1, nr = rowsOf(s)[n]; if (growingRow(nr)) spot = { ...spot, drift: n }; }
+  if (spot.kind === 'bramble' && spot.row != null && s.clock.year > 1) { const n = spot.row - 1; if (growingRow(rowsOf(s)[n])) spot = { ...spot, drift: n }; }
   return spot;
 }
-function pamelaPos(s, spot) {
-  if (spot.kind === 'bramble') {
-    const k = brambleGrazed(s, spot.row) / M.pamela.lumpsPerDay / cutDays();
-    return { x: 5.6 - k * 13.5, z: rowZ(spot.row) - 0.3 };
+function pamelaPos(s: State, spot: { kind: string; row?: number | null }): { x: number; z: number } {
+  const r = spot.row;
+  if (spot.kind === 'bramble' && r != null) {
+    const k = brambleGrazed(s, r) / M.pamela.lumpsPerDay / cutDays();
+    return { x: 5.6 - k * 13.5, z: rowZ(r) - 0.3 };
   }
-  if (spot.kind === 'row') return { x: -1.2 + u(s, 'pamelaX') * 4, z: rowZ(spot.row) };
+  if (spot.kind === 'row' && r != null) return { x: -1.2 + u(s, 'pamelaX') * 4, z: rowZ(r) };
   if (spot.kind === 'giant') return SPOT.giantSide;
   return { ...SPOT.washing };
 }
-function pamelaTitle(s) {
+function pamelaTitle(s: State) {
   const v = s.mischief.pamela.visit;
-  return v ? fill(ML.pamela.title[v.spot], { r: (v.row ?? 0) + 1 }) : '';
+  return v ? fill(own(ML.pamela.title, v.spot) ?? '', { r: (v.row ?? 0) + 1 }) : '';
 }
 // what a day of grazing there costs, in the bubble's words (computed from T so a retune can't make it lie)
-const rowBite = (s, r) => Math.max(1, Math.round(yieldOf(rowsOf(s)[r]?.variety) * PM.rowHurt));
-function grazeSub(s, v) {
+const rowBite = (s: State, r: number | null) => Math.max(1, Math.round(yieldOf(r == null ? null : rowsOf(s)[r]?.variety ?? null) * PM.rowHurt));
+function grazeSub(s: State, v: MischiefPamelaVisit): string {
   if (v.spot === 'bramble') return v.drift != null ? fill(ML.pamela.sub.drift, { r: v.drift + 1 }) : ML.pamela.sub.bramble;
   if (v.spot === 'row') return fill(ML.pamela.sub.row, { n: rowBite(s, v.row) });
-  return ML.pamela.sub[v.spot];
+  return own(ML.pamela.sub, v.spot) ?? '';
 }
 // the "left alone" choice: she grazes where grazing is harmless, Biscuit walks her home from a row or the giant
-const pamelaDefault = (v) => (v.spot === 'row' || v.spot === 'giant' ? 'whistle' : 'graze');
+const pamelaDefault = (v: MischiefPamelaVisit) => (v.spot === 'row' || v.spot === 'giant' ? 'whistle' : 'graze');
 // Both buttons look the same (rulings R5): neither is styled primary; a tap outside is the left-alone choice. Pamela has her
 // say in it, the only thing she ever says (plan §2.5): "Mehh."
-function pamelaCard(s, ctx) {
+function pamelaCard(s: State, ctx: Ctx) {
   const v = s.mischief.pamela.visit;
-  ctx.card('mischief', { kind: 'pamela', spot: v.spot, title: pamelaTitle(s), text: say(s, ctx, 'pamela.meh', ML.pamela.meh), defaultChoice: pamelaDefault(v), at: at(v.x, v.z, 0.9),
-    choices: [{ id: 'graze', label: ML.pamela.graze, sub: grazeSub(s, v) }, { id: 'whistle', label: ML.pamela.whistle, sub: ML.pamela.whistleSub }] });
+  if (!v) return;
+  ctx.card({ kind: 'mischief', data: { kind: 'pamela', spot: v.spot, title: pamelaTitle(s), text: say(s, ctx, 'pamela.meh', ML.pamela.meh), defaultChoice: pamelaDefault(v), at: at(v.x, v.z, 0.9),
+    choices: [{ id: 'graze', label: ML.pamela.graze, sub: grazeSub(s, v) }, { id: 'whistle', label: ML.pamela.whistle, sub: ML.pamela.whistleSub }] } });
 }
-function pamelaChoose(s, ctx, choice, alone = false) {
+function pamelaChoose(s: State, ctx: Ctx, choice: string, alone = false) {
   const v = s.mischief.pamela.visit;
   if (!v || v.choice) return;
   if (choice === 'whistle') { pamelaHome(s, ctx, 'whistle'); return; }
@@ -366,22 +377,25 @@ function pamelaChoose(s, ctx, choice, alone = false) {
   grazeDay(s, ctx, !alone);                          // the payoff shows at once: lumps vanish, Gran says how much is clear
 }
 // One day of Pamela grazing her spot (at most maxDays). now: the player just chose it (Gran comments).
-function grazeDay(s, ctx, now = false) {
+function grazeDay(s: State, ctx: Ctx, now = false) {
   const P = s.mischief.pamela, v = P.visit;
+  if (!v) return;
+  const r = v.row;
   v.days++;
-  if (v.spot === 'bramble') {
-    P.goatDays[v.row] = Math.min(cutDays(), (P.goatDays[v.row] || 0) + 1);
-    const pos = pamelaPos(s, v);
+  if (v.spot === 'bramble' && r != null) {
+    const n = Math.min(cutDays(), (P.goatDays[r] || 0) + 1);
+    P.goatDays[r] = n;
+    const pos = pamelaPos(s, { kind: v.spot, row: r });
     v.x = pos.x; v.z = pos.z;
-    const n = P.goatDays[v.row], frac = FRACTIONS[Math.min(FRACTIONS.length - 1, Math.round((n * PM.lumpsPerDay / ML_LUMPS) * 6))];
-    if (n >= cutDays()) { ctx.say('gran', [fill(ML.pamela.cleared, { r: v.row + 1 })]); pamelaHome(s, ctx, 'full'); return; }
-    if (now) ctx.say('gran', [fill(ML.pamela.clear, { r: v.row + 1, frac })]);
+    const frac = FRACTIONS[Math.min(FRACTIONS.length - 1, Math.round((n * PM.lumpsPerDay / ML_LUMPS) * 6))] ?? '';
+    if (n >= cutDays()) { ctx.say('gran', [fill(ML.pamela.cleared, { r: r + 1 })]); pamelaHome(s, ctx, 'full'); return; }
+    if (now) ctx.say('gran', [fill(ML.pamela.clear, { r: r + 1, frac })]);
     else toast(ctx, ML.pamela.bit, 'patch', 'good');
-  } else if (v.spot === 'row') {
-    const row = rowsOf(s)[v.row];
-    if (row && growingRow(row)) { hurt(s, row, PM.rowHurt, 'goat'); toast(ctx, fill(ML.pamela.ate, { n: rowBite(s, v.row), r: v.row + 1 }), 'patch', 'warn'); }
+  } else if (v.spot === 'row' && r != null) {
+    const row = rowsOf(s)[r];
+    if (row && growingRow(row)) { hurt(s, row, PM.rowHurt, 'goat'); toast(ctx, fill(ML.pamela.ate, { n: rowBite(s, r), r: r + 1 }), 'patch', 'warn'); }
   } else if (v.spot === 'giant') {
-    if (alive(s.giant)) addScar(s, s.giant, 'goat');
+    if (s.giant && alive(s.giant)) addScar(s, s.giant, 'goat');
     if (s.mischief.visit?.id === 'skunk_shade') { skunkStartle(s, ctx); pamelaHome(s, ctx, 'skunks'); return; }
   } else if (v.spot === 'washing') {
     P.shawl = true;
@@ -393,20 +407,22 @@ function grazeDay(s, ctx, now = false) {
 }
 const ML_LUMPS = 18;                                 // render/patch.js BRAM: a bramble row's lumps
 // She goes home (Biscuit walks her, she's full, the bees or a foghorn sent her): the cooldown is longer after a feast.
-function pamelaHome(s, ctx, why) {
+function pamelaHome(s: State, ctx: Ctx, why: string) {
   const P = s.mischief.pamela, v = P.visit;
   if (!v) return;
   P.visit = null;
   if (s.mischief.pin?.id === 'pamela') s.mischief.pin = null;
-  P.fullUntil = s.clock.day + (v.days >= PM.fullDays ? PM.cooldown[1] : PM.cooldown[0]);
+  const [shortRest, longRest] = PM.cooldown;
+  P.fullUntil = s.clock.day + (v.days >= PM.fullDays ? longRest : shortRest);
   if (why === 'whistle') ctx.emit({ type: 'mischief/whistle', x: v.x, z: v.z });
   ctx.emit({ type: 'mischief/leave', id: 'pamela', x: v.x, z: v.z, why });
-  const text = { whistle: ML.pamela.home, full: ML.pamela.full, bees: ML.pamela.bees, foghorn: ML.pamela.foghorn, skunks: ML.pamela.skunks, gone: ML.pamela.gone }[why];
+  const texts: Record<string, string> = { whistle: ML.pamela.home, full: ML.pamela.full, bees: ML.pamela.bees, foghorn: ML.pamela.foghorn, skunks: ML.pamela.skunks, gone: ML.pamela.gone };
+  const text = own(texts, why);
   if (text && !(why === 'full' && v.spot === 'washing')) toast(ctx, text, 'sparkle', why === 'whistle' ? 'good' : '');
 }
 // Each morning she's out: the bees may send her home on day 1 (a bee day with full hives), she may drift into the planted
 // row next to the bramble (years 2+; the pin re-arms), and she grazes another day.
-function pamelaDay(s, ctx) {
+function pamelaDay(s: State, ctx: Ctx) {
   const P = s.mischief.pamela, v = P.visit;
   if (!v || !v.choice || v.day === s.clock.day) return;
   const pa = s.patch;
@@ -425,7 +441,7 @@ function pamelaDay(s, ctx) {
 // ------------------------------------------------------------ startles (the after hooks, and the foghorn poke)
 // Something startled the farm ('foghorn': three foghorns; 'sail': the sail came down; 'pamela': she wandered over): Pamela
 // goes home, the seal flumps off, the skunks leave in a huff and the corner is skunked for a week.
-export function startle(s, ctx, cause) {
+export function startle(s: State, ctx: Ctx, cause: string) {
   const m = s.mischief;
   if (!m) return;
   if (cause === 'foghorn' && m.pamela.visit) pamelaHome(s, ctx, 'foghorn');
@@ -435,16 +451,16 @@ export function startle(s, ctx, cause) {
 
 // ------------------------------------------------------------ helpers other tracks read
 // lumps of bramble row r Pamela has eaten (render/patch.js hides them, east end first)
-export const brambleGrazed = (s, r) => Math.min(ML_LUMPS, (s?.mischief?.pamela?.goatDays?.[r] || 0) * PM.lumpsPerDay);
+export const brambleGrazed = (s: State, r: number) => Math.min(ML_LUMPS, (s?.mischief?.pamela?.goatDays?.[r] || 0) * PM.lumpsPerDay);
 // dollars off bramble row r's shop price (economy.js priceOf; the winter shop says "Pamela cleared some")
-export const priceCut = (s, r) => Math.min(PM.discountCap, (s?.mischief?.pamela?.goatDays?.[r] || 0) * PM.discountPerDay);
+export const priceCut = (s: State, r: string|number) => Math.min(PM.discountCap, (s?.mischief?.pamela?.goatDays?.[r] || 0) * PM.discountPerDay);
 // The Almanac's "who to expect" (plan §6.2): a forecast day's weather word, and its visitor once met. f: the day's fog.
-export function whoToExpect(s, d) {
+export function whoToExpect(s: State, d: WeatherForecast|{ day: number; f: number; rain: number; }) {
   if (!s.unlocks.marlene || !d) return null;
-  const F = ML.flags, met = (id) => !!s.mischief?.met?.[id];
+  const F = ML.flags, met = (id: string) => !!s.mischief?.met?.[id];
   if (d.f >= M.seal.f || d.rain) return { id: 'soup', word: F.soup.word, who: met('seal_haulout') ? F.soup.who : null };
   // the days before it: what Marlene did (up to today), or what Hal forecasts (never the year's hidden weather)
-  const fAt = (day) => (day <= s.clock.day ? s.weather.days[day]?.f : s.weather.forecast?.find((x) => x.day === day)?.f) ?? 0;
+  const fAt = (day: number) => (day <= s.clock.day ? s.weather.days[day]?.f : s.weather.forecast?.find((x) => x.day === day)?.f) ?? 0;
   const prev = [1, 2, 3].map((k) => fAt(d.day - k));
   if (d.f < M.swarm.clearF && prev.every((f) => f >= M.swarm.sulkF)) return { id: 'bees', word: F.bees.word, who: met('swarm') ? F.bees.who : null };
   if (d.f < PM.f) return { id: 'out', word: F.out.word, who: met('pamela') ? F.out.who : null };
@@ -452,16 +468,17 @@ export function whoToExpect(s, d) {
 }
 // How a bot answers a visitor's bubble (bots.js: P.pamela 'smart' | 'whistle' | 'graze', P.possum 'smart' | 'rest' | 'ask').
 // Smart reads only what the bubble shows: the spot (a row or the giant means whistle), and whether the possum's row has bugs.
-export function botChoice(card, s, P) {
-  const k = card.data?.kind;
+export function botChoice(card: Card, s: State, P: Policy): string | undefined {
+  if (card.kind !== 'mischief') return undefined;
+  const k = card.data.kind;
   if (k === 'pamela') {
-    const p = P.pamela || 'smart';
+    const p = P.pamela ?? 'smart';
     if (p === 'smart') return card.data.spot === 'row' || card.data.spot === 'giant' ? 'whistle' : 'graze';   // the title's spot
     return p;
   }
   if (k === 'possum') {
-    const p = P.possum || 'smart', v = s.mischief?.visit;
-    if (p === 'smart') return v?.row != null && rowsOf(s)[v.row]?.bugs > 0 ? 'rest' : 'ask';
+    const p = P.possum ?? 'smart', v = s.mischief?.visit;
+    if (p === 'smart') return v?.row != null && bugsOf(s, v.row) > 0 ? 'rest' : 'ask';
     return p;
   }
   return undefined;
@@ -471,42 +488,42 @@ export function botChoice(card, s, P) {
 // (f-notes: track A routes them through ctx.moment). A tip is due (giant.tipDue) -> a 'tip' moment, the lowest prio: it
 // says its line when a quiet window comes. Year 1's kelp (Aug 18) is the otter's delivery, a delight moment that never
 // waits behind chatter and is never lost (its drop fires it).
-function kelpDue(s) {
+function kelpDue(s: State) {
   const d = s.clock.day, at0 = s.weather.script?.kelp, g = s.giant;
-  if (s.clock.year !== 1 || at0 == null || d < at0 || s.events.year.kelp || !s.unlocks.feed || !alive(g)) return false;
+  if (s.clock.year !== 1 || at0 == null || d < at0 || s.events.year.kelp || !s.unlocks.feed || !g || !alive(g)) return false;
   return !(g.creaking && s.story.beats['giant.creak'] === undefined);     // never on a creak Old Moss has yet to explain
 }
-function otterKelp(s, ctx) {
+function otterKelp(s: State, ctx: Ctx) {
   if (s.events.year.kelp || !fireNow(s, ctx, 'kelp')) return;
   if (find(s, ctx, 'bottle', { mine: true })) toast(ctx, ML.otter.bottle, 'sparkle', 'event');   // (part of the beat showing)
 }
 
 // ------------------------------------------------------------ the module
-const fresh0 = () => ({ pin: null, visit: null, met: {}, coats: [], clips: [], skunkedUntil: 0, iou: 0, look: null, porch: null,
+const fresh0 = (): Mischief => ({ pin: null, visit: null, met: {}, coats: [], clips: [], skunkedUntil: 0, iou: 0, look: null, porch: null,
   pamela: { visit: null, goatDays: {}, escapes: 0, fullUntil: 0, shawl: false } });
-const fail = (reason) => ({ ok: false, reason });
+const fail = (reason: string) => ({ ok: false as const, reason });
 export default {
   id: 'mischief',
   events: EVENTS,
-  init(s) { s.mischief = fresh0(); },
-  newYear(s) {
+  init(s: State) { s.mischief = fresh0(); },
+  newYear(s: State) {
     const m = (s.mischief ||= fresh0());
     Object.assign(m, { pin: null, visit: null, look: null, porch: null, skunkedUntil: 0 });
     Object.assign(m.pamela, { visit: null, escapes: 0, fullUntil: 0, shawl: false });
     // a bramble row that was bought is no longer bramble: its goat-days are spent
-    for (const r of Object.keys(m.pamela.goatDays)) if (s.patch?.rows?.[r]?.open) delete m.pamela.goatDays[r];
+    for (const r of Object.keys(m.pamela.goatDays)) if (s.patch?.rows?.[Number(r)]?.open) delete m.pamela.goatDays[r];
   },
-  phase(s, ctx, from) {
+  phase(s, _ctx, from) {
     if (from !== 'grow' || !s.mischief) return;
     s.mischief.visit = null; s.mischief.look = null; s.mischief.pamela.visit = null;   // the summer's visitors go home
   },
-  dayStart(s, ctx) {
+  dayStart(s: State, ctx: Ctx) {
     const m = s.mischief;
     if (!m || !grows(s)) return;
     m.look ??= null; m.porch ??= null;
     const v = m.visit;
     if (v?.id === 'seal_haulout') sealDay(s, ctx, v);
-    else if (v?.id === 'possum_nap') { shield(s, ctx); if (s.clock.day >= v.until) endVisit(s, ctx, 'rested', ML.possum.leave); }
+    else if (v?.id === 'possum_nap') { shield(s, ctx); if (v.until != null && s.clock.day >= v.until) endVisit(s, ctx, 'rested', ML.possum.leave); }
     else if (v?.id === 'skunk_shade' && !s.weather.heat && s.weather.f >= M.skunks.f) endVisit(s, ctx, 'cool', ML.skunks.leave);
     else if ((v?.id === 'biscuit_dig' || v?.id === 'otter_look') && v.until != null && s.clock.day >= v.until) endVisit(s, ctx, 'looked');
     pamelaDay(s, ctx);
@@ -529,34 +546,35 @@ export default {
   },
   after: {
     // lowering the sail on the skunks startles them; three foghorns (track D's lighthouse poke) startle everybody
-    'giant/shade': (s, a, res, ctx) => { if (!s.giant?.shade) startle(s, ctx, 'sail'); },
-    'world/poke': (s, a, res, ctx) => { if (a.id === 'lighthouse' && (a.burst ?? 1) >= 3) startle(s, ctx, 'foghorn'); },
+    'giant/shade': (s, _a, _res, ctx) => { if (!s.giant?.shade) startle(s, ctx, 'sail'); },
+    'world/poke': (s, a, _res, ctx) => { if (a.id === 'lighthouse' && (a.burst ?? 1) >= 3) startle(s, ctx, 'foghorn'); },
   },
   actions: {
     // The ✦ tap (ui/mischief.js): the visitor plays its one animation and says its line, or opens its bubble. Returns where
     // to look ({ at, fit }) and what to show (caption, or the id of a dialogue line to wait for).
-    'mischief/tap': (s, a, ctx) => {
+    'mischief/tap': (s, _a, ctx) => {
       const pin = s.mischief?.pin;
       if (!pin) return fail('nothing there any more');
       const ev = catalogue(ctx.modules).find((e) => e.id === pin.id);
       s.mischief.pin = null;
       ctx.emit({ type: 'mischief/look', id: pin.id, x: pin.x, z: pin.z });
-      const r = ev?.look?.(s, ctx, pin) || {};
-      return { ok: true, id: pin.id, at: { x: pin.x, y: pin.y, z: pin.z }, fit: M.look[pin.id] ?? M.look.fit, caption: r.caption ?? null, dialog: r.dialog ?? null };
+      const r: DelightLook = ev?.look?.(s, ctx, pin) ?? {};
+      return { ok: true, id: pin.id, at: { x: pin.x, y: pin.y, z: pin.z }, fit: own(M.look, pin.id) ?? M.look.fit, caption: r.caption ?? null, dialog: r.dialog ?? null };
     },
   },
   cards: {
     mischief(s, card, choice, ctx) {
       if (card.data.kind === 'pamela') pamelaChoose(s, ctx, choice);
       else if (card.data.kind === 'possum') possumAnswer(s, ctx, choice);
+      return undefined;
     },
   },
   // Bots tap a share of the ✦ pins (P.mischief.taps, keyed so a replay taps the same ones); their bubbles are answered by
   // botChoice through each policy's answer (bots.js).
-  bot(s, ctx, P) {
+  bot(s, _ctx, P) {
     const pin = s.mischief?.pin, taps = P.mischief?.taps ?? 0;
     if (pin && taps > 0 && !s.story.cards.length && u(s, 'tap', pin.id) < taps) return { type: 'mischief/tap' };
   },
-};
+} satisfies SimModule;
 export { EVENTS as DELIGHTS };
-export const isVisiting = (s, id) => s.mischief?.visit?.id === id || (id === 'pamela' && !!s.mischief?.pamela?.visit);
+export const isVisiting = (s: State, id: string|undefined) => s.mischief?.visit?.id === id || (id === 'pamela' && !!s.mischief?.pamela?.visit);

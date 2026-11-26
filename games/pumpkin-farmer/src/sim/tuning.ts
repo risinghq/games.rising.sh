@@ -1,15 +1,61 @@
 // T: every gameplay number in docs/design-v1.md, one section per module, so the balance sims can sweep
 // them. Comments cite the design section (§n). Dates are 'Mon D' strings; convert with cal.dayOf().
 // Slices own their sections and may extend them; keep edits inside your own section.
+import type { Haplotype, SlotKey } from './state.js';
+
+export type Colour = 'O' | 'S' | 'T' | 'W';
+export type Shape = 'tall' | 'round' | 'flat';
+/** A founder line: allele means and the colour weights of its light and heavy haplotypes. */
+export interface Founder {
+  h: number; W: number | [number, number]; col: Record<string, number>; heavyCol: Record<string, number>;
+  t: [number, number]; tgh: number; evn: number; den: number;
+  sizeSd?: number; subLines?: number; fromYear?: number; ferry?: number; note?: string;
+}
+export type FounderId = 'vance' | 'tom' | 'mavis' | 'hoot' | 'vale' | 'lindqvist' | 'cove' | 'mystery';
+/** A rival grower's yearly line. */
+export interface Rival {
+  name: string; farm: string; species: string; W0: number; sd: number; g: number; dq: number;
+  beauty?: number; boast?: number | null; noShow?: number; last?: boolean; gag?: boolean; legitFromYear?: number;
+  fromYear?: number; attends?: number;
+}
+/** One species of visiting family: speed and patience multipliers, variety preferences and the species' own quirks. */
+export interface SpeciesRow {
+  walk: number; patience: number; prefs: Record<string, number>;
+  kids?: number; kidMini?: number; tips?: [number, number]; tipFull?: number; trucked?: number; howlSat?: number;
+  photo?: number; viral?: number; from?: number; noWagon?: boolean; raftSat?: number; swim?: number; barkSat?: number;
+  seaSat?: number; haulOut?: number;
+}
+/** What a judge weighs: the default weight is 1; Edna scores shape on her own table. */
+export interface JudgeRow { colour?: number; evenness?: number; shape?: number; symmetry?: number; stem?: number; shapes?: Record<Shape, number> }
+export type RivalId = 'vance' | 'tom' | 'mavis' | 'hoot' | 'vale' | 'raccoons' | 'lindqvist';
+
+export type Month = 'Apr' | 'May' | 'Jun' | 'Jul' | 'Aug' | 'Sep' | 'Oct';
+type PerMonth = Record<Month, number>;
+
+// A keyed table whose rows share one shape V: typed Record<its own keys, V>, so a lookup by its key union is exact and
+// a row's optional fields read as optional instead of missing.
+const table = <V>() => <K extends string>(rows: Record<K, V>) => rows;
+
+export type FogWord = 'Out' | 'Patchy' | 'In' | 'Sulking';
+export interface FeedRow { cost: number; mul: number; fromYear?: number }
+export interface Archetype { p: number; b: number; heatMul?: number; sigma?: number; rainMul?: number }
+
+export type ShopTab = 'hardware' | 'grange' | 'kqsc' | 'prep';
+// once: bought for good; year: paid each year; weekend, day, use: a consumable, bought again each time.
+export type ShopPer = 'once' | 'year' | 'weekend' | 'day' | 'use';
+export type ShopWhere = 'winter' | 'october' | 'grow';
+export type BrambleRow = 'row5' | 'row6' | 'row7';
+export interface ShopRow { tab: ShopTab; price: number; from: number; per?: ShopPer; where?: ShopWhere; max?: number; needs?: BrambleRow; [knob: string]: unknown }
+export interface HireRow { price: number; from: number; [knob: string]: unknown }
 
 export const T = {
   // ------------------------------------------------------------ §2 year loop and pacing
   calendar: {
-    months: [['Apr', 30], ['May', 31], ['Jun', 30], ['Jul', 31], ['Aug', 31], ['Sep', 30], ['Oct', 31]],
+    months: [['Apr', 30], ['May', 31], ['Jun', 30], ['Jul', 31], ['Aug', 31], ['Sep', 30], ['Oct', 31]] as [Month, number][],
     oct1Dow: 4,                                   // Oct 1 is always a Thursday (0 = Sun)
     lastDay: 213,                                 // Oct 31
     // real seconds per in-game day at 1x (§2 table)
-    secondsPerDay: [['Apr 1', 2.0], ['Jun 1', 3.6], ['Sep 1', 2.5]],
+    secondsPerDay: [['Apr 1', 2.0], ['Jun 1', 3.6], ['Sep 1', 2.5]] as [string, number][],
     weekdaySeconds: 1.5,                          // October weekdays (summary toast)
     // 9:00, 16:00, 17:00. 6 game-minutes a real second: an 80 s day at 1x, 40 s at 2x (design 8 and 60 s: at 8 the crowd
     // had to stride ~10 world units a second to fit a visit in; see the motion notes in T.season)
@@ -31,36 +77,38 @@ export const T = {
     // [foundation] only threats drop the speed to 1x (plan §2.3). id -> 0: always a threat; 'year': only the year's first;
     // n: only when the same alert hasn't come in the last n days (the first THIRSTY of a dry spell). Anything else (tinLow,
     // honeyFull, kelp, later bug clusters) is news and keeps the speed. An alert may say { threat: true | false } itself.
-    threats: { heatForecast: 0, heat_wave: 0, creak: 0, giantThirsty: 0, shelfSlip: 0, bugs: 'year', thirsty: 5 },
+    threats: { heatForecast: 0, heat_wave: 0, creak: 0, giantThirsty: 0, shelfSlip: 0, bugs: 'year' as const, thirsty: 5 },
   },
 
   // ------------------------------------------------------------ §5 Marlene
   weather: {
-    mu: { Apr: 0.45, May: 0.55, Jun: 0.66, Jul: 0.70, Aug: 0.62, Sep: 0.36, Oct: 0.42 },
+    mu: { Apr: 0.45, May: 0.55, Jun: 0.66, Jul: 0.70, Aug: 0.62, Sep: 0.36, Oct: 0.42 } as PerMonth,
     phi: 0.65, sigma: 0.17,                       // AR(1) persistence and daily noise
-    heatStart: { Apr: 0, May: 0, Jun: 0.005, Jul: 0.01, Aug: 0.02, Sep: 0.04, Oct: 0.04 },
-    heatDays: [2, 3],                             // 50/50
+    heatStart: { Apr: 0, May: 0, Jun: 0.005, Jul: 0.01, Aug: 0.02, Sep: 0.04, Oct: 0.04 } as PerMonth,
+    heatDays: [2, 3] as [number, number],         // 50/50
     heatF: 0.10,                                  // while on, f = min(f, 0.10)
-    rain: { Apr: 0.10, May: 0.06, Jun: 0, Jul: 0, Aug: 0, Sep: 0, Oct: 0.06 },
+    rain: { Apr: 0.10, May: 0.06, Jun: 0, Jul: 0, Aug: 0, Sep: 0, Oct: 0.06 } as PerMonth,
     rainF: 0.75,                                  // on rain days f = max(f, 0.75)
-    archetypes: {                                 // "Marlene's mood", drawn from Y3; Y1-Y2 are normal
+    archetypes: table<Archetype>()({              // "Marlene's mood", drawn from Y3; Y1-Y2 are normal
       normal: { p: 0.5, b: 0 },
       fog: { p: 0.2, b: 0.10 },
       vacation: { p: 0.2, b: -0.15, heatMul: 2 },
       wild: { p: 0.1, b: 0, sigma: 0.24, rainMul: 2 },
-    },
+    }),
     archetypeFromYear: 3,
     hintAccuracy: 0.7,                            // Old Moss's Almanac hint
     y1: {                                         // year-1 scripting
       heat: ['Aug 11', 'Aug 12', 'Aug 13'],       // shade intro
       noRandomHeatBefore: 'Aug 11',               // heat never arrives before the shade intro (interpretation)
       kelp: 'Aug 18',                             // scripted kelp wash-up (giant slice fires it)
-      calm: ['Oct 3', 'Oct 4'], calmF: [0.35, 0.6], // calm first weekend
+      calm: ['Oct 3', 'Oct 4'], calmF: [0.35, 0.6] as [number, number], // calm first weekend
       heatW3: ['Oct 16', 'Oct 17'],               // W3 Saturday is a heat wave (Route 46 intro)
     },
-    words: [[0.25, 'Out', "Marlene's out"], [0.5, 'Patchy', ''], [0.75, 'In', "Marlene's in"], [Infinity, 'Sulking', "Marlene's sulking"]],
+    words: [[0.25, 'Out', "Marlene's out"], [0.5, 'Patchy', ''], [0.75, 'In', "Marlene's in"], [Infinity, 'Sulking', "Marlene's sulking"]] as
+      [lim: number, word: FogWord, line: string][],
     heatLine: 'Heat over the hill',
-    forecast: { sigma: [0.08, 0.14, 0.20], hit: [0.8, 0.65, 0.5], falseAlarm: 0.05 },
+    // days: one entry per forecast day k = 1..3, its noise sd and the chance a real heat or rain day is called
+    forecast: { days: [{ sd: 0.08, hit: 0.8 }, { sd: 0.14, hit: 0.65 }, { sd: 0.20, hit: 0.5 }], falseAlarm: 0.05 },
     inThreshold: 0.5,                             // Crier: "Marlene was in on 71% of days" (f > 0.5)
     burnOff: 0.1,                                 // cosmetic morning burn-off on weekend days, fades by noon
     revealThicken: 0.2, easeSeconds: 1,
@@ -124,7 +172,7 @@ export const T = {
     novelty: 0.6,                                 // lambda x 0.6^(times seen in the last two years)
     maxShare: 0.25,                               // no type above 25% of a year's notables
     y1Gap: 90, y1MaxGap: 150,                     // year 1: random notables only fill gaps
-    target: { grow: [0.4, 0.65], weekend: [0.6, 1.0], minorPerMin: 1, storyPerYear: 2, notablesPerYear: [13, 16] },
+    target: { grow: [0.4, 0.65], weekend: [0.6, 1.0], minorPerMin: 1, storyPerYear: 2, notablesPerYear: [13, 16] satisfies [number, number] },
     toastGap: 30,                                 // at most one notable toast per 30 real seconds (UI)
     logKeep: 400,
     // catalogue numbers by event id (owning module in brackets)
@@ -137,10 +185,10 @@ export const T = {
       whale: { months: ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep'], f: 0.5, rate: 0.025, y1Rate: 0.04, weekendRate: 0.06, cooldown: 25, capGrow: 2, capSeason: 1, tapDays: 2, crowdTicks: 72, crowdShare: 0.5, returnSat: 8 }, // [events + season] crowdTicks: ~5 s at the shore after a ~5 s stroll there (design 40)
       quarter_sun: { months: ['Jun', 'Jul', 'Aug'], f: 0.08, cooldown: 14, cap: 3, growth: 1.15, sunscald: 2 }, // [events]
       heat_wave: { arrivals: 1.6 },               // [events; weather-driven]
-      moss_tip: { every: [18, 30], cap: 6, now: 0.5, late: 0.3, wrong: 0.2, doze: 0.3, dozeDays: 7, lateDays: 7 }, // [giant]
+      moss_tip: { every: [18, 30] satisfies [number, number], cap: 6, now: 0.5, late: 0.3, wrong: 0.2, doze: 0.3, dozeDays: 7, lateDays: 7 }, // [giant]
       // [A] the vine itself stays the director's story event (these odds and window: as a lane delight it came a third as often);
       // once it has sprouted, the lane puts a quiet ✦ over it on its own odds (patch.js volunteer_look)
-      volunteer_vine: { window: ['Jun 1', 'Jun 20'], chance: 0.35, shiny: 0.3, ripe: 'Oct 1' }, // [patch]
+      volunteer_vine: { window: ['Jun 1', 'Jun 20'] satisfies [string, string], chance: 0.35, shiny: 0.3, ripe: 'Oct 1' }, // [patch]
       twin_fruit: { chance: 0.08, pot: 1.06, stress: 2 }, // [giant]
       mutation: { white: 0.004, stripe: 0.002 }, // [genetics]
       // weekend chances are per 60 s of selling day (season.js scales them by the day's real length). With 80 s days the
@@ -150,13 +198,13 @@ export const T = {
       skunk_startle: { cooldownTicks: 60, radius: 4, ticks: 30, foghornTaps: 3, foghornSeconds: 5 }, // [season]
       lost_joey: { rate: 0.1, cooldown: 1, cap: 3, barkSeconds: 3, findTicks: 60, family: 25, everyone: 5, buzz: 0.1, lessonTicks: 120 }, // [season]
       // 1 per 600 fruit (design 400): the same ~1 a season (27% of seasons none) from the bigger rows of the economy pass
-      shiny: { perFruit: 600, cooldown: 5, capSeason: 3, kidGrab: 0.2, sellMul: 10, displayBuzz: 0.1, displaySat: 5, auction: [150, 600], // [patch]
+      shiny: { perFruit: 600, cooldown: 5, capSeason: 3, kidGrab: 0.2, sellMul: 10, displayBuzz: 0.1, displaySat: 5, auction: [150, 600] satisfies [number, number], // [patch]
         months: ['Sep', 'Oct'], kinds: { sphere: 150, heart: 250, smiley: 200, twins: 350, beak: 450, weighmaster: 600 } }, // auction $ by kind
       golden_hour: { from: 900, to: 990, f: 0.3, chance: 0.65, sat: 8, photoSat: 15, viralMul: 1.5 }, // [season] (design 50%: §14's weekend pace)
       viral: { chance: 0.3, capWeekend: 1, arrivals: 1.35, buzz: 0.35 }, // [season]
       pea_soup: { f: 0.85, arrivals: 0.65, linger: 1.2, sat: 3 }, // [season]
       big_tom_backfire: { rate: 0.14, cooldown: 2, arrivals: 1.15 }, // [season]
-      runaway_pumpkin: { perHour: 0.02, cooldown: 1, tapSeconds: 5, price: 8, roll: [-1.5, 9.6] }, // [season] Biscuit fetches it: no farmer trip
+      runaway_pumpkin: { perHour: 0.02, cooldown: 1, tapSeconds: 5, price: 8, roll: [-1.5, 9.6] satisfies [number, number] }, // [season] Biscuit fetches it: no farmer trip
       // Y3 (design §3 table; §10 says Y2+): Y2's season already adds the morning card and two customer types
       // gawkTicks: the day's chance is spread over this many minutes with someone gawking (fewer stroll over to her now)
       toddler_giant: { fromYear: 3, est: 500, rate: 0.25, gawkTicks: 60, cooldown: 1, poseTicks: 20, sat: 20, buzz: 0.05, ignore: -5, window: 48 }, // [season]
@@ -219,7 +267,7 @@ export const T = {
     // shuttle $60 a day (design $100): at $100 the heat-wave levers lost money even on the days they are for
     shuttle: { tab: 'kqsc', price: 60, from: 2, per: 'day', where: 'october', share: 0.27, from11: 660 }, // polish: 0.25
     forklift: { tab: 'prep', price: 200, from: 2, per: 'use', where: 'grow', risk: 0.003 },
-  },
+  } satisfies Record<string, ShopRow>,
   hires: {
     // Dez $300 (design $400) and Bea $200 (design $450): at $400 / $300 they lost $170-430 a season for everyone but a Lazy
     // stand (Dez) or a Novice (Bea), and most for the Operator who hires both. Now Dez is about even for a Realistic player
@@ -229,7 +277,7 @@ export const T = {
     howie: { price: 250, from: 3, spaces: 4, patience: 1.5 },        // design $350: he pays only on traffic-heavy weekends
     mavis: { price: 300, from: 3, catch: 0.8, naps: 0.1 },
     ladybug: { price: 300, from: 3, clears: 0.4 },
-  },
+  } satisfies Record<string, HireRow>,
 
   // ------------------------------------------------------------ §4 the commercial patch
   varieties: {
@@ -246,19 +294,19 @@ export const T = {
   },
   patch: {
     rows: 7, openY1: 4,
-    window: ['Jun 1', 'Jul 10'],                  // earlier needs Gran's confirm; later is flagged "won't make it"
+    window: ['Jun 1', 'Jul 10'] satisfies [string, string],                  // earlier needs Gran's confirm; later is flagged "won't make it"
     plantNudge: 'Jun 22',                         // the planting goal says what's at stake if nothing is in yet
     // Classic waves Jun 12 / Jul 3 / Jul 10 and the minis last, Jul 10: the kids come at the end of October, and W4 is the
     // biggest weekend, so Gran keeps two late waves for it. (Polish wave: Jun 12 / Jun 26 / Jul 8 + Mini Jul 6 left the
     // field bare by 3 pm on W4 Sunday in ~40% of years, every warm September; now ~10%, at the same money.)
-    gransPlan: [['classic', 'Jun 12'], ['classic', 'Jul 3'], ['classic', 'Jul 10'], ['mini', 'Jul 10']],
+    gransPlan: [['classic', 'Jun 12'], ['classic', 'Jul 3'], ['classic', 'Jul 10'], ['mini', 'Jul 10']] satisfies [string, string][],
     gransRows: [0, 2, 3, 1],                      // which row each plan entry fills: Classic and Mini up front (§4)
-    gransExtra: [['classic', 'Jun 19'], ['mini', 'Jun 30'], ['classic', 'Jul 2']], // "Gran's usual" for rows 5-7 (Y2+): no fads
-    ghostWhisker: [3, 0.06],                      // +/-(3 + 0.06 x DTM) days; narrows to +/-0 as real weather comes in
+    gransExtra: [['classic', 'Jun 19'], ['mini', 'Jun 30'], ['classic', 'Jul 2']] satisfies [string, string][], // "Gran's usual" for rows 5-7 (Y2+): no fads
+    ghostWhisker: [3, 0.06] satisfies [number, number],                      // +/-(3 + 0.06 x DTM) days; narrows to +/-0 as real weather comes in
     ghostSettle: 15,                              // the fixed +3 shrinks over the last 15 growth units
     growth: { base: 1.15, fog: 0.6, heat: 1.25, dryBelow: 0.3, dryMul: 0.6 },
-    stages: [[0, 'seeded'], [5, 'sprouts'], [20, 'vines'], [40, 'flowers'], [55, 'green']], // then ripe at DTM + offset
-    fruitSetAt: 55, beeWindow: [40, 55],
+    stages: [[0, 'seeded'], [5, 'sprouts'], [20, 'vines'], [40, 'flowers'], [55, 'green']] satisfies [number, string][], // then ripe at DTM + offset
+    fruitSetAt: 55, beeWindow: [40, 55] satisfies [number, number],
     cohorts: { offsets: [-6, -3, 0, 3, 6], shares: [0.1, 0.2, 0.4, 0.2, 0.1] },
     bees: { perHive: 0.03, f: 0.6 },              // n x (1 + 0.03 x hives x beeFrac)
     compost: 1.08,
@@ -271,7 +319,7 @@ export const T = {
     bugs: { from: 'Jul 1', minAge: 25, rate: 0.025, clearMul: 1.4, clearF: 0.3, fogMul: 0.7, fogF: 0.6, neighbour: 0.03, infested: 0.5,
       grow: 0.07, health: 0.012, squish: 0.35, buttons: 3, buttonSeconds: 3, chainSeconds: 1.5, spray: 15, block: 14,
       start: 0.15, forced: 0.3, compost: 0.8 },   // a new cluster starts at 0.15; Gran's Jul 20 teaching cluster at 0.3
-    mildew: { fromYear: 2, window: ['Jul 1', 'Sep 30'], base: 0.01, fog2: 0.05, health: 0.004, primeMul: 0.7, spray: 10, cure: 0.8, protect: 10,
+    mildew: { fromYear: 2, window: ['Jul 1', 'Sep 30'] satisfies [string, string], base: 0.01, fog2: 0.05, health: 0.004, primeMul: 0.7, spray: 10, cure: 0.8, protect: 10,
       start: 0.35, grow: 0.04, gone: 0.1, compost: 0.8, forceBy: 'Jul 25' }, // milk leaves 20% of it; under 0.1 it's gone
     barn: { cap: 60, loft: 180, cutFrom: 'Sep 1', restockN: 12, lessonUntil: 'Sep 30' },
     display: { large: 16, mini: 28 },             // pumpkins drawn per row = round(slots x stock / yield)
@@ -304,7 +352,7 @@ export const T = {
     // gives it this share of its supply (the causes, the stake flag's label).
     shelf: { demandK: { large: 1.4, mini: 1.4 }, demandW: { y1: [0.74, 0.73, 1.5, 1.12], later: [0.77, 0.87, 1.1, 0.99] }, levels: [0.3, 0.6, 0.9], slipMin: 0.08, slipEveryDays: 5, slipCauses: ['dry', 'bugs', 'mildew'],
       tally: { everyDays: 14, until: 'Sep 20' }, healthScale: 0.5, sowingLateDays: 5, fogF: 0.75, feedShare: 0.2, slipDry: 1,
-      hurtMin: 0.01, hyst: 0.04, spread: [0.5, 0.25], dryAhead: 5, slipGapDays: 3, windowWaitDays: 7 },
+      hurtMin: 0.01, hyst: 0.04, spread: [0.5, 0.25] satisfies [number, number], dryAhead: 5, slipGapDays: 3, windowWaitDays: 7 },
     // (sowingLateDays 5, not 3: a lesson keeps moments 12 s clear behind it, 3.3 June days, so 3 days could never outwait one.
     // spread [a, b]: fruit still to ripen counts b of itself a x its whisker early and b as late. dryAhead: on a thirsty
     // morning the projection lets the next days grow at the dry rate (if nobody waters this week). slipGapDays: between slips.
@@ -319,16 +367,16 @@ export const T = {
     germination: 0.95, backupDelay: 4,            // Y1 scripted to succeed
     transplant: 'May 6',
     preSet: { base: 0.96, water: 0.04, kelp: 0.015 }, // preSet = 0.96 + 0.04 goodWaterFrac + 0.015 kelpFrac (design 0.03: lazy care sat at the -10% edge)
-    firstFlower: ['Jul 1', 3],                    // ~Jul 1 +/- 3
+    firstFlower: ['Jul 1', 3] satisfies [string, number],                    // ~Jul 1 +/- 3
     dawns: 6, failedSetDelay: 3, beesAfterDawns: 5,
     // [C] pollination (plan §3.12, rulings R5): the bees come out by the fog (8 on a clear dawn, 1 when f >= beesOutF) and take
     // 92% / 50%; your own paws (self, a cross, a sib) take 80% any dawn. Reading the bees beats always trusting them.
-    set: { bees: { clear: 0.92, fog: 0.50 }, paws: 0.80, beesOutF: 0.6, beesShown: [8, 0.15] },
-    cullAfter: 10, rotateWindow: [5, 25], rotateFromYear: 2,
+    set: { bees: { clear: 0.92, fog: 0.50 }, paws: 0.80, beesOutF: 0.6, beesShown: [8, 0.15] satisfies [number, number] },
+    cullAfter: 10, rotateWindow: [5, 25] satisfies [number, number], rotateFromYear: 2,
     regime: { light: 0.45, normal: 0.62, heavy: 0.82, maxRefill: 0.22 },
     soak: 0.35, swing: { rise: 0.25, days: 3, mul: 3 },
     feedResumeDays: 7,                             // feed switched off for want of cash comes back on once a week of it is in the tin
-    feed: { none: { cost: 0, mul: 1 }, kelp: { cost: 2, mul: 1.05 }, fish: { cost: 4, mul: 1.09, fromYear: 2 }, both: { cost: 6, mul: 1.12, fromYear: 2 } },
+    feed: table<FeedRow>()({ none: { cost: 0, mul: 1 }, kelp: { cost: 2, mul: 1.05 }, fish: { cost: 4, mul: 1.09, fromYear: 2 }, both: { cost: 6, mul: 1.12, fromYear: 2 } }),
     kelpDensity: 0.012, fishStress: 1.25, fishHeist: 0.2, fishSkunkSat: 3,
     // [C] upFog: the sail up on a foggy day (f > fogF) costs growth (plan §3.12 retune 1: "always up" loses to "by forecast")
     shade: { upGrowth: 0.96, upFog: 0.90, fogF: 0.5, heatDownGrowth: 0.75, heatDownStress: 2.5, sunscald: 0.04, maxScald: 3, scaldFrom: 'Aug 1' },
@@ -342,15 +390,15 @@ export const T = {
     logistic: { k: 0.085, mid: 55 },              // L(t) = 1 / (1 + e^(-0.085 (t - 55)))
     slowdown: { from: 'Sep 20', to: 'Oct 20', floor: 0.3 },
     qNoise: 0.05,
-    water: [[0.25, 0.5], [0.45, 0.85]],           // C_water below 0.25 -> 0.5; below 0.45 -> 0.85; else 0.95 + 0.15 min(1, (m - .45)/.40)
+    water: [[0.25, 0.5], [0.45, 0.85]] satisfies [[number, number], [number, number]],           // C_water below 0.25 -> 0.5; below 0.45 -> 0.85; else 0.95 + 0.15 min(1, (m - .45)/.40)
     waterTop: { base: 0.95, add: 0.14, from: 0.45, span: 0.40 }, // add (design 0.15): intact Heavy sat at +5.4% of a +3-6% band
     light: { k: 0.12, mid: 0.5 },
     cracked: 0.6, peakDiv: 4,                     // peakGain = POT x 0.085 / 4
     moisture: { base: 0.06, sun: 0.10, growth: 0.05, heat: 0.08, rain: 0.30 },
-    stress: { dry: [0.5, 0.16], mid: [0.72, 0.35], wetSlope: 3.5, fog: 0.3, F: 0.5, cap: 3 }, // dry (design .12): Light split 0.8% against a 0.5% floor
+    stress: { dry: [0.5, 0.16] satisfies [number, number], mid: [0.72, 0.35] satisfies [number, number], wetSlope: 3.5, fog: 0.3, F: 0.5, cap: 3 }, // dry (design .12): Light split 0.8% against a 0.5% floor
     // two-stage creaks. Design: base .045, split [.03, .12], heal [.40, .30]; retuned so most Balanced years have a creak
     // (design §14 >= 70%) while the split bands hold: more creaks, each a little more forgiving at low stress.
-    creak: { fromT: 15, base: 0.13, split: [0.0, 0.10], heal: [0.50, 0.25] },
+    creak: { fromT: 15, base: 0.13, split: [0.0, 0.10] satisfies [number, number], heal: [0.50, 0.25] satisfies [number, number] },
     split: { blowout: 0.4, crackScars: 2, cavity: 0.25, seedsAfter: 60 },
     softSpot: { rate: 0.0004, from: 'Oct 1' },
     ott: { a: 5.8e-5, b: 2.87, noise: 0.006, round: 0.5, drift: 0.85 }, // drift: share of the tape error that wanders weekly
@@ -368,11 +416,11 @@ export const T = {
     germDays: 3, autoStart: 7, vineAfter: 18, minFlowerAfter: 30, maxSetFails: 3, cablesDays: 7, cablesPot: 1.03,
     soakerRefill: 0.35,                           // the soaker hose holds the target (no swings from regimen changes)
     practice: { heal: 0.5, maxDays: 3 },          // the year-1 practice creak always heals
-    knock: { rhoSd: 0.055, k: 2.2, range: [0.7, 1.3] }, // pitch = 1 - k (rho - 1 + noise); denser thunks deeper
-    thirsty: [0.25, 0.35],                        // alert under, re-arm over
-    vigorHint: [0.96, 1.04],                      // "so-so" under, "vigorous" over
+    knock: { rhoSd: 0.055, k: 2.2, range: [0.7, 1.3] satisfies [number, number] }, // pitch = 1 - k (rho - 1 + noise); denser thunks deeper
+    thirsty: [0.25, 0.35] satisfies [number, number],                        // alert under, re-arm over
+    vigorHint: [0.96, 1.04] satisfies [number, number],                      // "so-so" under, "vigorous" over
     tips: { firstY1: 'Jun 10', first: 'Apr 20' }, // Old Moss's first tip of the year (Y1: after he appears)
-    goodWater: [0.45, 0.85],                      // a "good water" day before set (preSet)
+    goodWater: [0.45, 0.85] satisfies [number, number],                      // a "good water" day before set (preSet)
     regimeStepDays: 3,                            // bots step back up gently after a creak heals
     // [C] Moving Day (plan §3.11, rulings R7): she roots in 1, 3 or 5 days by that morning's actual fog (clear / patchy /
     // foggy); her first flower moves by rootDays + flowerShift, and her potential moves by sulkPot a day either side of
@@ -380,12 +428,12 @@ export const T = {
     // cold move: what makes the forecast read worth pounds at the scale, tests/balance/choices.test.js). pivot is the
     // root days a forecast reader gets on average (2.0 over 200 springs), so reading Hal costs nothing over the old fixed
     // May 6 move, and the careers' prizes (tests/balance/economy.test.js) keep their growth
-    moving: { offer: 3, rootDays: [[0.5, 1], [0.75, 3], [Infinity, 5]], flowerShift: -2, sulkPot: 0.025, pivot: 2, likely: 0.6 },
+    moving: { offer: 3, rootDays: [[0.5, 1], [0.75, 3], [Infinity, 5]] satisfies [[number, number], [number, number], [number, number]], flowerShift: -2, sulkPot: 0.025, pivot: 2, likely: 0.6 },
     // [C] the water dial (plan §3.12): hidden in year 1 until Old Moss's creak lesson, live from Moving Day in years 2+;
     // Soak shows only when she is parched; the tape rests measureEvery days between tapes (rulings R4)
     regimeHiddenUntilCreak: true, soakShowBelow: 0.3, measureEvery: 3,
     // [C] the germination block: giant/start { file } (a future close-up's filing strokes) moves her up a day early or late
-    tinFile: { good: [3, 5], over: 8 },
+    tinFile: { good: [3, 5] satisfies [number, number], over: 8 },
     // [C] the pace line (plan §3.12): the tape's estimate projected on the public growth curve to the weigh-off, give or take
     // err x the share of her growth still to come, at least min (the tape can't see her density: the scale lands ~5% off
     // the curve all season), rounded to round lb. About 3 weigh-ins in 4 land inside it (tests/balance/choices.test.js)
@@ -399,15 +447,15 @@ export const T = {
   genetics: {
     loci: ['S1', 'COL', 'S2', 'DEN', 'S3', 'EVN', 'TGH', 'SHP'],
     link: [0.15, 0.5, 0.5, 0.5, 0.2, 0.5, 0.5], // recombination fraction to the next locus
-    colours: ['O', 'S', 'T', 'W'],                // dominance O > S > T > W
+    colours: ['O', 'S', 'T', 'W'] satisfies Colour[],                // dominance O > S > T > W
     pot: { base: 500, perSize: 60, colour: { O: 0, S: 40, T: 80, W: 40 }, shape: { tall: -40, round: 0, flat: 80 } },
     tgh: [1.6, 1.3, 1.0, 0.8, 0.6],               // stress multiplier by TGH sum 0..4
     mutate: { step: 0.02, white: 0.004, stripe: 0.002 },
-    grandpa: { a: [1, 'O', 1, 1, 1, 2, 1, 't'], b: [2, 'T', 1, 2, 0, 1, 1, 'f'], F: 0.125, pot: 828 },
+    grandpa: { a: [1, 'O', 1, 1, 1, 2, 1, 't'] satisfies Haplotype, b: [2, 'T', 1, 2, 0, 1, 1, 'f'] satisfies Haplotype, F: 0.125, pot: 828 },
     // Founder lines. Allele mean m = (W_line - 500 - 60 h) / 360. Each haplotype is "heavy" with chance h: it carries
     // high S1 in phase with a pale colour (heavyCol) and high S3 in phase with low EVN, so heavy-vs-pretty is built in.
     // col: colour weights of light haplotypes; t: chance of a tall SHP allele [light, heavy]; tgh/evn/den: allele means.
-    founders: {
+    founders: table<Founder>()({
       vance: { h: 0.5, W: 950, col: { O: 0.55, S: 0.45 }, heavyCol: { T: 0.6, S: 0.4 }, t: [0.5, 0.4], tgh: 1, evn: 2, den: 1.8, note: 'pale-ish, round' },
       tom: { h: 0.9, W: 900, col: { O: 1 }, heavyCol: { T: 0.75, S: 0.25 }, t: [0.35, 0.2], tgh: 0.3, evn: 1.6, den: 1.2, note: 'tan, flat, TGH low' },
       mavis: { h: 0.5, W: 850, col: { O: 0.8, S: 0.2 }, heavyCol: { T: 0.7, S: 0.3 }, t: [0.5, 0.35], tgh: 1, evn: 1.8, den: 1.5 },
@@ -421,7 +469,7 @@ export const T = {
       // W (design 900): open pollination is a safe step, not a road to the record, and a Grange line beats it in Y2
       cove: { h: 0.3, W: 780, sizeSd: 0.9, subLines: 8, col: { O: 0.75, S: 0.2, W: 0.05 }, heavyCol: { T: 0.6, S: 0.4 }, t: [0.5, 0.4], tgh: 1, evn: 1.7, den: 1.5, note: 'the Cove pool' },
       mystery: { h: 0.4, W: [550, 1250], sizeSd: 1.0, col: { O: 0.5, S: 0.2, T: 0.2, W: 0.1 }, heavyCol: { T: 0.6, W: 0.4 }, t: [0.5, 0.3], tgh: 1, evn: 1.5, den: 1.5, note: 'from a trench coat' },
-    },
+    }),
     founderDiv: 360, heavyShift: 0.5, sizeSd: 1.0, evnHeavy: -0.9,
     hybridVigour: 1.03, hybridOverlap: 0.1, inbredBadge: 0.4, plumpCorr: 0.3,
     plump: { noise: 3.2, cut: 1.4, centre: 6, scale: 1.4 },   // hint score = (sizeSum - centre)/scale + N(0, noise); |score| > cut
@@ -436,29 +484,29 @@ export const T = {
     // Base_y = 17 (1 + 0.12 (y - 1)), capped at y = 8 (design 22): the design's own ~20-24 families a year-1 day (with
     // R ~4 and buzz), growing to ~38 a day by Y5, which a 7-row field and a phone screen can both still hold
     base: 17, growth: 0.12, capYear: 8,
-    rep: [0.7, 0.1],                              // REP = 0.7 + 0.1 R (design 0.55 + 0.15 R): a gentler in-season word-of-mouth loop
+    rep: [0.7, 0.1] satisfies [number, number],                              // REP = 0.7 + 0.1 R (design 0.55 + 0.15 R): a gentler in-season word-of-mouth loop
     wx: { base: 1.15, fog: 0.5, heat: 1.6, rain: 0.5 },
-    buzz: [-0.2, 0.6],
+    buzz: [-0.2, 0.6] satisfies [number, number],
     parkingLotPatch: { fromYear: 4, arrivals: 0.95 },
     weekday: 0.15,                                // weekday families = 0.15 x Base x REP x WX
     panic: 0.5,                                   // Panic Night = 0.5 x Base families in 30 s
     hourly: [0.8, 1.0, 1.15, 1.2, 1.15, 1.05, 0.95, 0.7], // arrival weights 9:00-16:00
     owlsFrom: 900,
-    dwell: [70, 90], visibleCap: { phone: 16, desktop: 24 },
-    expectedY1: { day: 20, W1: 16, W4: 26, heat: [40, 45], season: 230 },
+    dwell: [70, 90] satisfies [number, number], visibleCap: { phone: 16, desktop: 24 },
+    expectedY1: { day: 20, W1: 16, W4: 26, heat: [40, 45] satisfies [number, number], season: 230 },
     // the lot is what keeps the crowd legible on a phone: 9 + gravel 4 = 13 on foot on an ordinary busy day (design 10,
     // gravel 6, beach 6); past that, cars wait on Route 46. Howie (+4), the beach (+4) and Gran (+3) are the busy-day valves.
     // [integration] the beach is +4 again (the motion pass had made it +5): on the one-way road a heat-wave crowd with the
     // shuttle running put 5.1% of Y4 weekend minutes over the phone's 16 on foot (limit 5%); at +4 it is 4.4% and the
     // heat wave with every lever pulled still turns only ~13% of cars away (band 5-15%). layout ROAD.sand has one space each.
     parking: { y1: 9, beach: 4, gravel: 4, howie: 4, gran: 3 },
-    road: { patience: [30, 60], heat: 0.7, howie: 1.5, gran: 1.5, turnR: -0.005, meterCars: 12, amber: 5, red: 10, howls: [0.5, 0.75] },
+    road: { patience: [30, 60] satisfies [number, number], heat: 0.7, howie: 1.5, gran: 1.5, turnR: -0.005, meterCars: 12, amber: 5, red: 10, howls: [0.5, 0.75] satisfies [number, number] },
     tellHal: { mul: 0.5, ticks: 60 },
     beachSat: -3, beachPelicanSat: 3,
     family: { kids: 2 },
     // A visit is ~100 game-minutes from the car pulling in to it pulling away (the lot and the phone's crowd both count
     // it), with families strolling at 2.6 u/s: picking 6-11 minutes a row (design 10-20) keeps time to walk
-    walkToGate: 8, pickTicks: [4, 9], possumPick: 1.33,
+    walkToGate: 8, pickTicks: [4, 9] satisfies [number, number], possumPick: 1.33,
     // Detours at a stroll (design: the giant always for Photo Families and 40% of the rest, the maze 35%, raccoon kits
     // to the hay fort 80%): the giant corner is a ~25-unit round trip from the front rows, ~10 s of walking, so half the
     // Photo Families and a few fans make it, plus half the families who end up in the back rows (from row 5, beside
@@ -483,7 +531,7 @@ export const T = {
     actions: { tryAccept: 0.7, tryRegular: 0.85, trySat: 8, fetchSat: 15, restockLoad: 1, restockN: 12, popMs: 40, cutTicks: 10, treatTicks: 10 },
     wagons: { y1: 6, add: 4, price: 150, max: 14 },
     overnight: { n: 30, bea: 40, below: 0.5 },    // Fri and Sat nights only (design 20 every night)
-    density: { y1: [8, 15], y3: [18, 28], y3hires: [12, 20] },
+    density: { y1: [8, 15] satisfies [number, number], y3: [18, 28] satisfies [number, number], y3hires: [12, 20] satisfies [number, number] },
     sat: {
       start: 60, min: 0, max: 100, adult: 15, kid: 10, soft: 3, suggested: 8, alone: 3, adultMiss: -10, kidMiss: -10,
       noWagon: -5, bargain: 5, premiumSensitive: -10, premiumOther: -3, gawk: 5, golden: 8, goldenPhoto: 15,
@@ -513,7 +561,7 @@ export const T = {
     bubbleHold: 24,                   // ticks a tapped [?] waits while you choose
     answerWait: 90,                   // a family waits this long for your farmer to arrive with an answer
     noWagonTicks: 16,                 // the "no wagon" bubble is only a sigh
-    honeyPrice: 10, beaverTip: [2, 5],
+    honeyPrice: 10, beaverTip: [2, 5] satisfies [number, number],
     review: { chance: 0.45, keep: 12, fresh: 40 },   // fresh: lines remembered so the ticker doesn't repeat itself
     candidates: 160,                  // families pre-drawn per weekend day (common random numbers: N picks the first N)
     weekdayLast: 'Oct 23',            // weekday trickle Oct 1-23
@@ -523,13 +571,14 @@ export const T = {
     bot: {                            // design §14 attention models (bots only). A person's timings are real seconds at 1x.
       attentive: { serveWait: 20, rows: 1 },  // ring up when two are waiting; a lone family is Gran's (18 ticks) unless she is
                                               // slow; checks the rows every second
-      realistic: { react: [1.5, 4], perWindow: 5, window: 12, rows: 3 }, // 1.5-4 s reaction, <= 25 actions/min, rows every ~3 s
-      novice: { serveEvery: 1, bubbles: 0.4, react: [2, 4] },
+      realistic: { react: [1.5, 4] satisfies [number, number], perWindow: 5, window: 12, rows: 3 }, // 1.5-4 s reaction, <= 25 actions/min, rows every ~3 s
+      novice: { serveEvery: 1, bubbles: 0.4, react: [2, 4] satisfies [number, number] },
       restockBelow: 0.3, strayAt: 2, roadAt: 5,
     },
   },
   species: {                                      // §7 families; walk and patience multipliers, preference weights
-    list: ['possum', 'skunk', 'raccoon', 'beaver', 'coyote', 'fox', 'owl', 'pelican', 'otter', 'seal'],
+    list: ['possum', 'skunk', 'raccoon', 'beaver', 'coyote', 'fox', 'owl', 'pelican', 'otter', 'seal'] as const,
+    ...table<SpeciesRow>()({
     possum: { walk: 0.75, patience: 1.0, kidMini: 0.9, prefs: { classic: 5, white: 1, warty: 1, cinderella: 1, blue: 1 } },
     skunk: { walk: 1.0, patience: 1.0, prefs: { classic: 4, white: 1, warty: 3, cinderella: 1, blue: 1 } },
     raccoon: { walk: 1.1, patience: 1.0, prefs: { classic: 3, white: 4, warty: 1, cinderella: 1, blue: 1 } },
@@ -547,6 +596,7 @@ export const T = {
     // haulOut: seal families ashore at once. Seals skip the lot's cap, so each one ashore is an extra family on foot
     // (and a seal walks the whole farm, stand to sea): 3 put 8.2% of Y4 minutes over the phone's 16, 2 5.9%, 1 4.8%.
     seal: { walk: 0.9, swim: 1.2, patience: 1.3, barkSat: 3, seaSat: 3, haulOut: 1, noWagon: true, prefs: { classic: 4, white: 2, warty: 1, cinderella: 1, blue: 4 } },
+    }),
     // kids want a mini 60% of the time (design 70%; joeys 90%, chicks 75%): ~1.3 mini wants a family, which one 300-mini row
     // covers in year 1 and two rows cover in the busiest later years
     wants: { adultLarge: 0.9, two: 0.2, kidMini: 0.6, weirdFromYear: 2, weird: 0.15 },
@@ -557,7 +607,7 @@ export const T = {
       oldTimer: { fromYear: 2, share: 0.10, beaver: 0.3, owl: 0.3, premium: -0.35, trucked: 0.35 },
       panic: { fromYear: 3 },
     },
-    fads: { confidence: [0.55, 0.85], hold: 1.8, priceTolerance: 0.25, fizzle: 0.8, viral: 0.25, viralMul: 1.5, viralWeekend: 2, reveal: 'Jul 1' },
+    fads: { confidence: [0.55, 0.85] satisfies [number, number], hold: 1.8, priceTolerance: 0.25, fizzle: 0.8, viral: 0.25, viralMul: 1.5, viralWeekend: 2, reveal: 'Jul 1' },
   },
 
   // ------------------------------------------------------------ §8 the weigh-off
@@ -572,7 +622,6 @@ export const T = {
     pretty: {
       colour: { O: 1.0, S: 0.75, T: 0.45, W: 0.7, striped: 0.85 },
       shape: { tall: 0.8, round: 1.0, flat: 0.4 },
-      evenMildew: -0.1,
       // big ones slump (design -0.05 per 300 lb over 1,200): from 900 lb, -0.08 per 100 lb, so a Heaviest winner is rarely the
       // prettiest (Double Crown was 4% of Balanced years against a 5% cap and 27% of careers by Y8: no holy grail)
       symmetry: { base: 0.7, rotated: 0.25, flatBottom: -0.2, roundCull: 0.1, heavy: -0.1, slumpPer: 100, slumpFrom: 900, slump: -0.08 },
@@ -580,8 +629,11 @@ export const T = {
       scars: { sunscald: 1, crack: 2, heist: 1, scuff: 1 }, scarK: 0.6,
       rivalSd: 2.0,                             // design 1.5: with year-1 scars Grandpa's line won 11%, under the design's own 15-20%
       judges: {
-        mayor: { colour: 2 }, edna: { shape: 2, shapes: { tall: 1.0, round: 0.6, flat: 0.2 } }, sasha: { evenness: 1.5, symmetry: 1.5 },
-        guestFromYear: 3, moss: { asleep: 0.5, scores: [5.0, 9.5] }, vance: { stem: 3 },
+        ...table<JudgeRow>()({
+          mayor: { colour: 2 }, edna: { shape: 2, shapes: { tall: 1.0, round: 0.6, flat: 0.2 } }, sasha: { evenness: 1.5, symmetry: 1.5 },
+          vance: { stem: 3 },
+        }),
+        guestFromYear: 3, moss: { asleep: 0.5, scores: [5.0, 9.5] },
       },
     },
     y1Pretty: { you: 24, vale: 25.5, winChance: [0.15, 0.2] },
@@ -599,12 +651,13 @@ export const T = {
       first: 0.8, gap: 1.75, jitter: 0.35,
       spots: [[-19.0, 0.5, 7.4, 'hedge'], [-18.9, 0.5, 11.2, 'hedge'], [-17.4, 0.45, 13.9, 'fence'], [-13.6, 0.45, 13.8, 'hay'],
         [-11.6, 0.5, 11.4, 'corn'], [-11.5, 0.5, 7.2, 'corn'], [-13.4, 0.45, 4.4, 'hay'], [-17.6, 0.45, 4.6, 'fence'],
-        [-12.2, 0.55, 9.3, 'corn'], [-18.6, 0.55, 9.2, 'hedge']],
+        [-12.2, 0.55, 9.3, 'corn'], [-18.6, 0.55, 9.2, 'hedge']] satisfies [number, number, number, string][],
     },
     reveal2: { stall: 1000, chartFlash: 900, hundredHaptic: 18 }, // ms: the stall short of the chart, CHART! flash, haptic per hundred
     photo: { w: 240, h: 180 },
   },
   rivals: {
+    ...table<Rival>()({
     // wave 3: Vance 930 +3.8%/yr and Big Tom +3.5%/yr (design 950 / 900, +5%) keep year 1 winnable (~13%) and the Grange
     // lines a catch-up tool; the raccoons' first legit giant 1,100 (design 1,150); Lindqvist at her 1,450 peak (design +2%/yr)
     // and 45% attendance (design 50%) so she is the boss you sometimes beat. Balanced P(1st) 13/24/40/29/40% (Y1-Y5).
@@ -615,11 +668,12 @@ export const T = {
     vale: { name: 'Sienna Vale', farm: 'Gourdgeous', species: 'fox', W0: 540, sd: 0.08, g: 0.02, dq: 0.05, beauty: 0.85, boast: -0.05 },
     raccoons: { name: 'The Parking Lot Patch', farm: 'The Parking Lot Patch', species: 'raccoon', gag: true, legitFromYear: 5, W0: 1100, sd: 0.10, g: 0.03, dq: 0.08 },
     lindqvist: { name: 'Ingrid Lindqvist', farm: 'visiting legend', species: 'skunk', W0: 1450, sd: 0.10, g: 0, dq: 0.15, beauty: 0.50, fromYear: 4, attends: 0.45 },
+    }),
     rubberBand: 0.06,
     record: { W: 1612, who: 'Vance Sr.', year: 1987 },
   },
   prizes: {
-    heaviest: { perLb: [3, 0.8, 0.4], ribbon: 50, ribbonPlaces: [4, 6] },
+    heaviest: { perLb: [3, 0.8, 0.4], ribbon: 50, ribbonPlaces: [4, 6] satisfies [number, number] },
     firstTimer: 100, personalBest: 200, personalBestFrom: 2, record: 2500,
     pretty: [400, 150, 50], doubleCrown: 1000, shinyAuction: [150, 600],
   },
@@ -683,7 +737,7 @@ export const T = {
       A: [['Apr 7', 'Apr 12'], ['biscuit_dig']], B: [['Apr 24', 'Apr 25'], ['seal_haulout', 'otter_look']],
       C: [['Jun 8', 'Jun 16'], ['pamela']], E: [['Jul 3', 'Jul 14'], ['possum_nap']],
       F: [['Jul 17', 'Jul 28'], ['pamela', 'seal_haulout', 'swarm_look', 'whale']],
-    } },
+    } satisfies Record<SlotKey, [[string, string], string[]]> },
   },
   // [A] visitors (plan §3.2, §3.3). Year-1 effects are cosmetic or bounded (rulings R5, R16): no giant visits and no row hurt
   // in year 1; the possum's shield only helps. cap/cooldown per year [year 1, years 2+] where they differ.
@@ -693,7 +747,7 @@ export const T = {
     dig: { months: ['Apr', 'May'], rate: 0.025, dryF: 0.6 },   // he digs on a dry morning (f < dryF); years 2+ now and then
     // fog visitors: pea soup or rain; she stays until Marlene lifts (f < liftF), 2-6 days; a coat you haven't met is newCoat
     // times likelier; she naps by the giant (sail down, giant at vines or later) or in a planted row's damp aisle
-    seal: { f: 0.82, rate: 0.1, rateRain: 0.2, cooldown: 20, cap: [2, 3], stay: [2, 6], liftF: 0.6, newCoat: 3 },
+    seal: { f: 0.82, rate: 0.1, rateRain: 0.2, cooldown: 20, cap: [2, 3], stay: [2, 6] satisfies [number, number], liftF: 0.6, newCoat: 3 },
     otter: { f: 0.6, months: ['Apr', 'May', 'Jun'], rate: 0.02 },
     // a grey-day visitor in a planted row (the buggiest one); once bugs are unlocked her joeys herd them off: the row's bugs
     // shrink a day while she rests and no cluster starts there for shieldDays. Years 2+: a bubble, rest or the pouch (coupon $).
@@ -707,7 +761,7 @@ export const T = {
     // Each bramble day clears lumpsPerDay of the row's lumps (render) and takes discountPerDay off its shop price (capped).
     // Years 2+ only: rows (hurt rowHurt a day), the giant's leaves (a scuff) and the drift from the bramble into a planted
     // neighbour. beeChase: on a bee day with the hives at least beeFull of their cap, the bees send her home on day 1.
-    pamela: { from: ['Jun 6', 'May 1'], f: 0.45, rate: 0.15, cooldown: [12, 18], fullDays: 3, cap: [3, 4, 5], maxDays: 4, lumpsPerDay: 3,
+    pamela: { from: ['Jun 6', 'May 1'], f: 0.45, rate: 0.15, cooldown: [12, 18] satisfies [number, number], fullDays: 3, cap: [3, 4, 5], maxDays: 4, lumpsPerDay: 3,
       weights: { bramble: 3, rowFlowers: 2, rowVines: 1.5, giant: 1, washing: 1 }, rowHurt: 0.06, drift: 0.2,
       discountPerDay: 50, discountCap: 300, beeChase: 0.3, beeFull: 0.67 },
   },
@@ -736,7 +790,7 @@ export const T = {
   // A First shows at once when it answers the player's own tap or card; any other waits up to waitDays for a quiet window
   // (the moments queue), and past that it is filed silently (rulings R2, R19). Ladder rungs read the tape's estimate.
   firsts: { waitDays: 3,
-    ladder: [[60, 'lb60'], [100, 'lb100'], [300, 'lb300'], [500, 'lb500'], [750, 'lb750'], [1000, 'lb1000'], [1147, 'lb1147']],
+    ladder: [[60, 'lb60'], [100, 'lb100'], [300, 'lb300'], [500, 'lb500'], [750, 'lb750'], [1000, 'lb1000'], [1147, 'lb1147']] satisfies [number, string][],
     seedling: { leafDays: 6, leaves: 6 },         // her seedling grows a true leaf every 6 days in the pot (render/giant.js)
     signPaintS: 1.2 },                            // MEET {NAME}: the sign paints her name over this many seconds
   road: { quiet: { mul: 2, lookahead: 2 }, stops: 3, chipMax: 26 },
@@ -749,7 +803,8 @@ export const T = {
   // `hush` knocks' noise).
   // knockRead: a knock deeper than 1 - this reads THOONK (she'll tape over), higher than 1 + this reads tonk (under), else
   // thunk. Measured over 300 farms (tests/sim/crawl.test.js): reading the hushed knock 61% right, the middle 55%, blind 34%.
-  crawl: { guess: { tom: [0.40, 0.15], vance: [0, 0.12], look: 0.8, round: 5 }, range: [0.92, 1.08], green: 0.10,
+  crawl: { guess: { tom: [0.40, 0.15] satisfies [number, number], vance: [0, 0.12] satisfies [number, number], look: 0.8, round: 5 },
+    range: [0.92, 1.08] satisfies [number, number], green: 0.10,
     hush: 4, knockRead: 0.15,
     sunday: { skipWithin: 2, wait: 2 } },
   // [E] the hands-on close-ups: the bug hunt (rulings R0)
@@ -757,12 +812,12 @@ export const T = {
   // ppu 93 px a unit, and the camera squashes the ground's depth to squashZ of that on screen. A row shows up to `bugs`.
   hands: { fit: 4.2, ppu: 93, squashZ: 0.75, bugs: 14,
     reachPx: 28, leafReachPx: 40, comboS: 0.7, comboGran: 5, timerS: 10, simpleTimer: 1.5,
-    crawl: 0.2, wander: 2.2, area: [1.1, 0.5], flee: { r: 1.2, speed: 0.9, ms: 600 }, speedUp: 0.1, speedCap: 0.6,
+    crawl: 0.2, wander: 2.2, area: [1.1, 0.5] satisfies [number, number], flee: { r: 1.2, speed: 0.9, ms: 600 }, speedUp: 0.1, speedCap: 0.6,
     // the big leaves a bug can run under: a cluster of n bugs has those whose leavesFrom <= n (a settled-in cluster has
     // more cover: answering early is easier), each holding at most leafCap
-    leaves: [[0.1, -0.65], [-1.45, 0.55], [1.5, 0.5]], leavesFrom: [0, 6, 10], hideR: 0.12, leafCap: 3,
+    leaves: [[0.1, -0.65], [-1.45, 0.55], [1.5, 0.5]] satisfies [number, number][], leavesFrom: [0, 6, 10], hideR: 0.12, leafCap: 3,
     // the headless thumb (hunt.js playerOf): [skill 0, skill 1] ends of the tap gap, eye-thumb lag, miss (px), first tap (s)
-    player: { gap: [0.75, 0.3], react: [0.4, 0.16], aim: [18, 6], first: [0.9, 0.45] },
+    player: { gap: [0.75, 0.3], react: [0.4, 0.16], aim: [18, 6], first: [0.9, 0.45] } satisfies Record<string, [number, number]>,
     // the clock a hunt holds: the camera coming in and the ending (base) plus the play, measured from playHunt at the
     // balanced thumb (about half a second a bug), never more than the ring (the pacing harness charges this)
     session: { base: 1.9, perBug: 0.5 },
@@ -771,3 +826,30 @@ export const T = {
     maxExtraDraws: 8 },
 };
 export default T;
+
+/** One family species' row in T.species. */
+export interface SpeciesTuning {
+  walk: number; patience: number; prefs: Record<string, number>;
+  kidMini?: number; kids?: number; tips?: number[]; tipFull?: number; trucked?: number; howlSat?: number; photo?: number;
+  viral?: number; from?: number; noWagon?: boolean; raftSat?: number; swim?: number; barkSat?: number; seaSat?: number;
+  haulOut?: number;
+}
+export type SpeciesId = (typeof T.species.list)[number];
+export const isSpecies = (id: string): id is SpeciesId => T.species.list.some((sp) => sp === id);
+/** The row for a species read from data (a save, a family); undefined for one the tuning does not know. */
+export const findSpecies = (id: string): SpeciesTuning | undefined => (isSpecies(id) ? T.species[id] : undefined);
+/** The row for a species the sim placed itself: an unknown one is a bug. */
+export function speciesOf(id: string): SpeciesTuning {
+  const row = findSpecies(id);
+  if (!row) throw new Error(`unknown species ${id}`);
+  return row;
+}
+
+export const RIVAL_IDS = ['vance', 'tom', 'mavis', 'hoot', 'vale', 'raccoons', 'lindqvist'] as const;
+/** Whether an id names a rival (not 'record' or a player entry). */
+export const isRivalId = (id: string): id is RivalId => RIVAL_IDS.some((x) => x === id);
+/** A rival by id, or undefined for an id that is not a rival (such as 'record'). */
+export function rivalOf(id: string): Rival | undefined {
+  const k = RIVAL_IDS.find((x) => x === id);
+  return k === undefined ? undefined : T.rivals[k];
+}

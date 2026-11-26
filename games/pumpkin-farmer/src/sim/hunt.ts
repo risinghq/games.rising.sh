@@ -15,12 +15,29 @@
 // Coordinates are world units: x along the row, z across it, the cluster at (cx, cz). The screen is the UI's business;
 // headless picking squashes z by T.hands.squashZ, which is how the close-up's camera foreshortens the ground.
 import { T } from './tuning.js';
-import { makeRng, next, gauss } from './rng.js';
+import { makeRng, next, gauss, type Rng } from './rng.js';
 import { clamp, lerp } from './util.js';
 
 export const CRAWL = 0, FLEE = 1, HID = 2, DEAD = 3;
+export type BugState = typeof CRAWL | typeof FLEE | typeof HID | typeof DEAD;
 const TH = () => T.hands;
-const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+
+type Spot = { x: number; z: number };
+/** h: heading (radians). t: seconds of running left. leaf: the leaf it runs for, else -1. at: when it was squished. */
+export interface Bug extends Spot { h: number; st: BugState; t: number; leaf: number; at: number }
+/** hid: the bugs under it. wig: how hard it wiggles, 0..1. */
+export interface Leaf extends Spot { hid: number; open: boolean; wig: number }
+export type HuntOver = 'clear' | 'ground';
+/** seated: the render has started the bugs where they crawled on the row. */
+export interface Hunt {
+  n: number; cx: number; cz: number; r: Rng; bugs: Bug[]; leaves: Leaf[]; fast: number; timerS: number;
+  time: number; hits: number; combo: number; best: number; lastHit: number; flips: number; over: HuntOver | null;
+  seated?: boolean;
+}
+export interface HuntOpts { n: number; cx?: number; cz?: number; seed?: number; fast?: number; timerS?: number }
+export type Pick = { bug: number } | { leaf: number };
+
+const dist = (a: Spot, b: Spot) => Math.hypot(a.x - b.x, a.z - b.z);
 
 // The hunt's words: Gran's in the hint strip (the start, a hide, the combo, the two endings: patch/hunt picks the ending's
 // line with fresh()), the floaters, and the Row sheet's bug panel.
@@ -43,15 +60,15 @@ export const LINES = {
 // leaves an infestation that shows exactly k (under the fresh-cluster level, only a hunt ever gets a row: one bug a quarter
 // of it). Squishing three of five must never leave "four".
 const START = () => T.patch.bugs.start, PER = () => 1 / TH().bugs;
-export const bugsShown = (b) => (!(b > 0) ? 0 : b < START() ? Math.ceil(b / (START() / 4) - 1e-9)
+export const bugsShown = (b: number) => (!(b > 0) ? 0 : b < START() ? Math.ceil(b / (START() / 4) - 1e-9)
   : Math.min(TH().bugs, Math.max(4, Math.ceil(b / PER() - 1e-9))));
-function shownRange(k) {
+function shownRange(k: number): [number, number] {
   const q = START() / 4;
   return k < 4 ? [(k - 1) * q, k * q] : k === 4 ? [3 * q, 4 * PER()] : [(k - 1) * PER(), k * PER()];
 }
 // the infestation after a hunt with `hits` of the bugsShown(b) squished: the plan's b x (1 - hits/n), nudged inside the
 // band that shows the bugs actually left
-export function bugsAfter(b, hits) {
+export function bugsAfter(b: number, hits: number) {
   const n = bugsShown(b), k = n - clamp(Math.round(hits) || 0, 0, n);
   if (k <= 0) return 0;
   if (k === n) return b;
@@ -60,13 +77,14 @@ export function bugsAfter(b, hits) {
 }
 // the clock a hunt holds: the camera coming in and the ending, plus the play (never longer than the ring); the pacing
 // harness charges it per hunt, and tests/balance/bugs.test.js holds it to what playHunt measures
-export const sessionSeconds = (n) => TH().session.base + Math.min(TH().timerS, TH().session.perBug * n);
+export const sessionSeconds = (n: number) => TH().session.base + Math.min(TH().timerS, TH().session.perBug * n);
 
 // fast: a speed multiplier on every bug (Reduce Motion halves it); timerS: the ring (Simple gestures adds half again)
-export function createHunt({ n, cx = 0, cz = 0, seed = 1, fast = 1, timerS = TH().timerS }) {
+export function createHunt({ n, cx = 0, cz = 0, seed = 1, fast = 1, timerS = TH().timerS }: HuntOpts): Hunt {
   const h = TH(), r = makeRng(seed);
-  const leaves = h.leaves.filter((_, k) => n >= h.leavesFrom[k]).map(([dx, dz]) => ({ x: cx + dx, z: cz + dz, hid: 0, open: false, wig: 0 }));
-  const bugs = Array.from({ length: Math.max(0, n) }, () => ({
+  const leaves = h.leaves.filter((_, k) => n >= (h.leavesFrom[k] ?? Infinity))
+    .map(([dx, dz]): Leaf => ({ x: cx + dx, z: cz + dz, hid: 0, open: false, wig: 0 }));
+  const bugs = Array.from({ length: Math.max(0, n) }, (): Bug => ({
     x: cx + (next(r) * 2 - 1) * h.area[0] * 0.8, z: cz + (next(r) * 2 - 1) * h.area[1] * 0.8,
     h: next(r) * Math.PI * 2, st: CRAWL, t: 0, leaf: -1, at: -1,
   }));
@@ -74,26 +92,26 @@ export function createHunt({ n, cx = 0, cz = 0, seed = 1, fast = 1, timerS = TH(
 }
 
 // The render's first frame of a hunt starts its bugs where they were crawling on the row (so the close-up doesn't jump).
-export function seatBugs(H, pts) {
+export function seatBugs(H: Hunt, pts: readonly Spot[]) {
   if (H.seated) return;
   H.seated = true;
-  H.bugs.forEach((b, i) => { if (pts[i] && b.st === CRAWL && H.time < 0.5) { b.x = pts[i].x; b.z = pts[i].z; } });
+  H.bugs.forEach((b, i) => { const p = pts[i]; if (p && b.st === CRAWL && H.time < 0.5) { b.x = p.x; b.z = p.z; } });
 }
 
 // every squish makes the rest a little quicker (the last bug is the hardest)
-export const speedOf = (H) => H.fast * (1 + Math.min(TH().speedCap, TH().speedUp * H.hits));
-export const live = (b) => b.st === CRAWL || b.st === FLEE;
-export const left = (H) => H.n - H.hits;
+export const speedOf = (H: Hunt) => H.fast * (1 + Math.min(TH().speedCap, TH().speedUp * H.hits));
+export const live = (b: Bug) => b.st === CRAWL || b.st === FLEE;
+export const left = (H: Hunt) => H.n - H.hits;
 
 // the leaf a running bug can make it under before its legs give out (open, not full), else -1
-function coverFor(H, b) {
+function coverFor(H: Hunt, b: Bug) {
   const h = TH(), reach = h.flee.speed * speedOf(H) * (h.flee.ms / 1000) + h.hideR;
   let best = -1, bd = reach;
   H.leaves.forEach((L, k) => { const d = dist(L, b); if (!L.open && L.hid < h.leafCap && d <= bd) { bd = d; best = k; } });
   return best;
 }
 
-export function stepHunt(H, dt) {
+export function stepHunt(H: Hunt, dt: number) {
   if (H.over) return;
   const h = TH(), sp = speedOf(H);
   H.time += dt;
@@ -122,7 +140,7 @@ export function stepHunt(H, dt) {
 }
 
 // A squish: the bug's done, the combo counts on, and the near ones run: for a leaf they can reach, else away from it.
-export function squish(H, i) {
+export function squish(H: Hunt, i: number) {
   const b = H.bugs[i], h = TH();
   if (H.over || !b || !live(b)) return null;
   b.st = DEAD; b.at = H.time;
@@ -139,7 +157,7 @@ export function squish(H, i) {
 }
 
 // Flip a wiggling leaf: whoever hid there scatters back toward the middle of the cluster (a flipped leaf stays open).
-export function flip(H, k) {
+export function flip(H: Hunt, k: number) {
   const L = H.leaves[k], h = TH();
   if (H.over || !L || L.open || !L.hid) return 0;
   L.open = true; L.hid = 0; H.flips++;
@@ -153,9 +171,9 @@ export function flip(H, k) {
 }
 
 // Headless picking: the live bug nearest a tap at world (x, z) within reach px, measured on the screen (z squashed as the
-// close-up's camera squashes it); else a wiggling leaf within its own reach. -> { bug } | { leaf } | null
-export function pickAt(H, x, z, ppu = TH().ppu) {
-  const h = TH(), sd = (p) => Math.hypot(p.x - x, (p.z - z) * h.squashZ) * ppu;
+// close-up's camera squashes it); else a wiggling leaf within its own reach.
+export function pickAt(H: Hunt, x: number, z: number, ppu = TH().ppu): Pick | null {
+  const h = TH(), sd = (p: Spot) => Math.hypot(p.x - x, (p.z - z) * h.squashZ) * ppu;
   let bi = -1, bd = h.reachPx;
   H.bugs.forEach((b, i) => { if (live(b)) { const d = sd(b); if (d <= bd) { bd = d; bi = i; } } });
   if (bi >= 0) return { bug: bi };
@@ -167,29 +185,30 @@ export function pickAt(H, x, z, ppu = TH().ppu) {
 // A thumb of skill 0..1: it taps every `gap` seconds at the bug nearest its last tap, aiming where the bug was `react`
 // seconds ago (eyes and thumb lag a moving bug) with a Gaussian miss of `aim` px; with nothing in the open it flips a
 // wiggling leaf. The numbers are T.hands.player's [skill 0, skill 1] ends.
-export function playerOf(skill) {
-  const p = TH().player, k = clamp(skill, 0, 1), at = ([a, b]) => lerp(a, b, k);
+export function playerOf(skill: number) {
+  const p = TH().player, k = clamp(skill, 0, 1), at = ([a, b]: readonly [number, number]) => lerp(a, b, k);
   return { gap: at(p.gap), react: at(p.react), aim: at(p.aim), first: at(p.first) };
 }
-export function playHunt({ n, skill = 0.5, seed = 1, dt = 1 / 30, fast = 1, timerS } = {}) {
+export interface PlayOpts { n: number; skill?: number; seed?: number; dt?: number; fast?: number; timerS?: number }
+export function playHunt({ n, skill = 0.5, seed = 1, dt = 1 / 30, fast = 1, timerS }: PlayOpts) {
   const H = createHunt({ n, seed, fast, timerS }), p = playerOf(skill), pr = makeRng(seed ^ 0x5bd1e995), ppu = TH().ppu;
-  const seen = H.bugs.map((b) => ({ x: b.x, z: b.z }));   // where the eyes have each bug: the true spot, lagged by react
-  let at = p.first, last = { x: H.cx, z: H.cz }, taps = 0;
+  const seen: Spot[] = H.bugs.map((b) => ({ x: b.x, z: b.z }));   // where the eyes have each bug: the true spot, lagged by react
+  let at = p.first, last: Spot = { x: H.cx, z: H.cz }, taps = 0;
   while (!H.over) {
     stepHunt(H, dt);
     const k = Math.min(1, dt / p.react);
-    H.bugs.forEach((b, i) => { seen[i].x += (b.x - seen[i].x) * k; seen[i].z += (b.z - seen[i].z) * k; });
+    H.bugs.forEach((b, i) => { const s = seen[i]; if (s) { s.x += (b.x - s.x) * k; s.z += (b.z - s.z) * k; } });
     if (H.over || H.time < at) continue;
     at = H.time + p.gap * (0.75 + 0.5 * next(pr));
-    let tgt = null, td = Infinity;
-    H.bugs.forEach((b, i) => { if (live(b)) { const d = dist(seen[i], last); if (d < td) { td = d; tgt = seen[i]; } } });
-    if (!tgt) tgt = H.leaves.find((L) => L.hid && !L.open);
+    let tgt: Spot | undefined, td = Infinity;
+    H.bugs.forEach((b, i) => { const s = seen[i]; if (s && live(b)) { const d = dist(s, last); if (d < td) { td = d; tgt = s; } } });
+    tgt ??= H.leaves.find((L) => L.hid && !L.open);
     if (!tgt) continue;
     const x = tgt.x + (gauss(pr) * p.aim) / ppu, z = tgt.z + (gauss(pr) * p.aim) / ppu / TH().squashZ;
     taps++; last = { x, z };
     const hit = pickAt(H, x, z, ppu);
-    if (hit?.bug != null) squish(H, hit.bug);
-    else if (hit?.leaf != null) flip(H, hit.leaf);
+    if (hit && 'bug' in hit) squish(H, hit.bug);
+    else if (hit) flip(H, hit.leaf);
   }
   return { hits: H.hits, seconds: H.time, over: H.over, best: H.best, flips: H.flips, taps };
 }

@@ -33,7 +33,7 @@ export const CL = {
     fuss: ['Gran fusses with the hoop house. Still sulking.', 'Gran tucks the soil in round her. Still sulking.',
       'Gran tells her a story about Grandpa. Still sulking.', 'Gran checks on her twice before breakfast. Still sulking.'],
     rooted: "She's rooted. A new leaf, at last.",
-    hal: ['gran', 'Hal said clear. Hal says a lot of things.'],
+    hal: ['gran', 'Hal said clear. Hal says a lot of things.'] satisfies [string, string],
     // the receipt rides her first flower (a toast, no window of its own): how many days the move gave or cost her
     flower: { early: 'First flower, {n} early. That clear moving morning paid, sweet pea.', even: 'First flower, right on time.',
       late: "First flower, {n} late. That's the sulk from moving day.", fog: 'First flower, {n} late. That foggy moving day. Ask me how I know.' },
