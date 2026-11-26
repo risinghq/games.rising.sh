@@ -92,11 +92,15 @@ export interface FabDef {
 export type TapHandler = (hit: Hit, api: Api, e: PointerEvent) => void;
 export interface PinDef {
   id: string; icon: string; label?: string;
+  /** Custom SVG markup in place of the icon, re-painted when it changes. */
+  svg?(s: State): string | undefined;
   when(s: State): boolean;
   pos(s: State): At | null;
   onTap(api: Api): void;
   urgent?(s: State): boolean;
 }
+/** The weekend override for the Row/Barn sheets' Cut/Restock buttons (ui/patch.js's rowHooks). */
+export type WeekendHook = (api: Api, row: number | undefined, what: string) => void;
 /** What registered UI handlers hear: the sim's out-events and the UI's own. */
 export type UiEvent = OutEvent | { type: 'ui/idle'; n: number };
 export type UiEventType = UiEvent['type'];
