@@ -1228,7 +1228,7 @@ const cullLabel = (choice: string) => own({ safe: GC.safe, stump: GC.stump, roun
 type MovingPick = { f: number; sd: number };
 const isMovingPick = (o: unknown): o is MovingPick => typeof o === 'object' && o !== null && 'sd' in o;
 const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
-export function consequence(s: State, choice: string, option: string|MovingPick|Giant|null): string {
+export function consequence(s: State, choice: string, option: string|MovingPick|GiantPlant|null): string {
   const y1 = s.clock.year === 1, M = CL.moving;
   switch (choice) {
     case 'moving': {

@@ -17,22 +17,43 @@ import { PLACES } from '../sim/layout.js';
 import { SAIL, sailY } from './world.js';
 import { estText } from '../sim/giant.js';
 import { T } from '../sim/tuning.js';
-import type { State, OutEvent } from '../sim/types.js';
-import type { Kit } from './types.js';
-import { Giant } from '../sim/state.js';
+import { own } from '../sim/util.js';
+import type { State } from '../sim/types.js';
+import type { Kit, FxEvent } from './types.js';
+import type { GiantPlant, GiantScarsBy } from '../sim/state.js';
 const GX = PLACES.giant.x, GZ = PLACES.giant.z;
 const P2 = { x: GX - 1.6, z: GZ + 1.6 }, P1 = { x: GX + 1.4, z: GZ - 1.2 };   // two plots (year 3) share the corner
 const COLORS = { O: 0xe39a52, S: 0xe8a77a, T: 0xd8b07c, W: 0xebe4d2 };
 const GREEN = new THREE.Color(0x7d9550);
-const SHAPES = { tall: [0.9, 1.2], round: [1, 1], flat: [1.1, 0.78] };
+const SHAPES: { tall: [number, number]; round: [number, number]; flat: [number, number] } = { tall: [0.9, 1.2], round: [1, 1], flat: [1.1, 0.78] };
 const LEGEND = { stage: 'fruit', name: 'Big Earl', est: 1450, wc: 1450, shade: true, color: 'O', shape: 'round', setDay: -60, m: 0.6 };
 // sqrt rather than the physical cube root: she should visibly grow from day to day (1,400 lb = the prototype's BIG EARL)
 const sizeOf = (W: number) => clamp(2.4 * Math.sqrt(Math.max(W, 3) / 1400), 0.12, 3.1);
-const PRE = new Set(['tin', 'started', 'sprout']);
 const SEEDLING_LEAVES = T.firsts.seedling.leaves, SIGN_PAINT = T.firsts.signPaintS;   // [D]
 
+/** What the corner reads of a plant; the LEGEND stand-in and the empty second plot fill only part of it. */
+interface Corner {
+  stage?: string; name?: string | null; seed?: { short: string } | string | null;
+  germDay?: number | null; transplantDay?: number | null; rootedDay?: number;
+  setDay?: number | null; wc?: number; gain?: number; est?: number; m?: number;
+  shade?: boolean; split?: string | null; creaking?: boolean; softSpot?: boolean; treated?: boolean;
+  color?: string; shape?: string; stripe?: boolean; scarsBy?: Partial<GiantScarsBy>; scars?: number;
+  mustache?: boolean; twins?: boolean; rotated?: boolean;
+  feed?: string; kelpFree?: number; radio?: string | null; hat?: boolean; plot2?: GiantPlant | null;
+}
+/** One fruit's pieces: a pivot (position), wob (tap squash), body (eased size) and her decals. */
+interface Fruit {
+  pos: THREE.Group; wob: THREE.Group; body: THREE.Group; mat: THREE.MeshStandardMaterial;
+  shell: THREE.Mesh; stripes: THREE.Group; scars: THREE.InstancedMesh; scald: THREE.InstancedMesh;
+  crack: THREE.Group; crackMat: THREE.MeshStandardMaterial; stitches: THREE.Group;
+  gash: THREE.Mesh; stache: THREE.Mesh; twin: THREE.Mesh;
+  size: number | null; col: THREE.Color; swell: number; shudder: number;
+}
+/** A point found on the fruit's skin, with the surface normal there. */
+interface SkinPoint { p: THREE.Vector3; n: THREE.Vector3 }
+
 // one fruit: a pivot (position), wob (tap squash), body (eased size) and her decals
-function makeFruit(root: THREE.Group<THREE.Object3DEventMap>, geo: THREE.BufferGeometry<THREE.NormalBufferAttributes>, x: number, z: number, r: { rand: any; rr: any; pick?: (arr: any) => any; }) {
+function makeFruit(root: THREE.Group, geo: THREE.BufferGeometry, x: number, z: number, r: ReturnType<typeof rng>): Fruit {
   const pos = new THREE.Group(); pos.position.set(x, 0, z); pos.rotation.set(0, 0.4, 0.04); root.add(pos);
   const wob = new THREE.Group(); pos.add(wob);
   const body = new THREE.Group(); wob.add(body);
@@ -64,26 +85,26 @@ function makeFruit(root: THREE.Group<THREE.Object3DEventMap>, geo: THREE.BufferG
   {
     const probe = new THREE.Mesh(geo); probe.scale.set(1, 1, 0.917); probe.updateMatrixWorld(true);
     const ray = new THREE.Raycaster(), o = new THREE.Vector3(), dir = new THREE.Vector3();
-    const onSkin = (a: number|undefined, y: number|undefined) => {           // a: angle around her (0 faces +z), y: height in body space
+    const onSkin = (a: number, y: number): SkinPoint | null => {           // a: angle around her (0 faces +z), y: height in body space
       o.set(Math.sin(a) * 3, y, Math.cos(a) * 3); dir.set(-o.x, 0, -o.z).normalize();
       ray.set(o, dir);
-      const h = ray.intersectObject(probe)[0];
-      return h ? { p: h.point.clone(), n: h.face.normal.clone().divide(probe.scale).normalize() } : null;
+      const h = ray.intersectObject(probe)[0], n = h?.face?.normal;
+      return h && n ? { p: h.point.clone(), n: n.clone().divide(probe.scale).normalize() } : null;
     };
     // the zigzag in (angle, height), then a midpoint between each pair so every piece hugs the curve
-    const zig: (string|number)[][] = []; { let a = -0.9, y = 0.78; for (let i = 0; i <= 7; i++) { zig.push([a, y]); a += 0.095; y -= r.rr(0.03, 0.09) * (i % 2 ? -1 : 1); } }
-    const pts: any[] = [];
-    zig.forEach(([a, y], i) => { if (i) pts.push(onSkin((a + zig[i - 1][0]) / 2, (y + zig[i - 1][1]) / 2)); pts.push(onSkin(a, y)); });
+    const zig: [number, number][] = []; { let a = -0.9, y = 0.78; for (let i = 0; i <= 7; i++) { zig.push([a, y]); a += 0.095; y -= r.rr(0.03, 0.09) * (i % 2 ? -1 : 1); } }
+    const pts: (SkinPoint | null)[] = [];
+    zig.forEach(([a, y], i) => { const prev = zig[i - 1]; if (i && prev) pts.push(onSkin((a + prev[0]) / 2, (y + prev[1]) / 2)); pts.push(onSkin(a, y)); });
     const m = new THREE.Matrix4(), tg = new THREE.Vector3(), bn = new THREE.Vector3(), nm = new THREE.Vector3(), eu = new THREE.Euler();
-    const lay = (A: { p: THREE.Vector3Like; n: THREE.Vector3Like; }, B: { p: THREE.Vector3Like; n: THREE.Vector3Like; }, mat: THREE.MeshStandardMaterial, size: (number|null)[], into: THREE.Group<THREE.Object3DEventMap>) => {
+    const lay = (A: SkinPoint, B: SkinPoint, mat: THREE.MeshStandardMaterial, size: [number | null, number, number, number], into: THREE.Group) => {
       tg.subVectors(B.p, A.p); const len = tg.length(); tg.divideScalar(len || 1);
       nm.addVectors(A.n, B.n).normalize(); bn.crossVectors(nm, tg).normalize(); nm.crossVectors(tg, bn);
       m.makeBasis(tg, bn, nm); eu.setFromRotationMatrix(m);
       const c = A.p.clone().add(B.p).multiplyScalar(0.5).addScaledVector(nm, size[3]);
       part(BOX, mat, [c.x, c.y, c.z], [size[0] ?? len + 0.006, size[1], size[2]], [eu.x, eu.y, eu.z], into);
     };
-    for (let i = 1; i < pts.length; i++) if (pts[i - 1] && pts[i]) lay(pts[i - 1], pts[i], crackMat, [null, 0.022, 0.03, 0.004], crack);
-    for (let i = 2; i < pts.length; i += 2) if (pts[i - 2] && pts[i]) lay(pts[i - 2], pts[i], thread, [0.022, 0.12, 0.03, 0.012], stitches);
+    for (let i = 1; i < pts.length; i++) { const A = pts[i - 1], B = pts[i]; if (A && B) lay(A, B, crackMat, [null, 0.022, 0.03, 0.004], crack); }
+    for (let i = 2; i < pts.length; i += 2) { const A = pts[i - 2], B = pts[i]; if (A && B) lay(A, B, thread, [0.022, 0.12, 0.03, 0.012], stitches); }
   }
   mergeLocal(stitches); mergeLocal(crack); crack.traverse((m) => (m.castShadow = false)); crack.visible = false; stitches.visible = false;
   const gash = part(ICO1, M(0x3a2414), [0.2, 0.55, 0.85], [0.38, 0.24, 0.2], [0.2, 0, 0.5], body); gash.visible = false;
@@ -101,7 +122,8 @@ export default function createGiantView(K: Kit) {
   // three little fruits on the vine before the cull (keep 1 of 3)
   const trio = new THREE.Group(); root.add(trio);
   const trioMat = PM(0x8fa55c, { roughness: 0.6 });
-  for (const [dx, dz, s] of [[0, 0, 0.28], [1.1, -1.9, 0.22], [-1.2, -1.6, 0.24]]) part(geo, trioMat, [GX + dx, 0, GZ + dz], [s, s, s], [0, r.rand() * 3, 0], trio);
+  const trioSpots: [number, number, number][] = [[0, 0, 0.28], [1.1, -1.9, 0.22], [-1.2, -1.6, 0.24]];
+  for (const [dx, dz, s] of trioSpots) part(geo, trioMat, [GX + dx, 0, GZ + dz], [s, s, s], [0, r.rand() * 3, 0], trio);
   mergeLocal(trio);
   // ---- soil: a dark ring when wet, pale and cracked when thirsty
   const soilMat = M(0x8a6e4e, { polygonOffset: true, polygonOffsetFactor: -2 });
@@ -110,15 +132,15 @@ export default function createGiantView(K: Kit) {
   const DRY = new THREE.Color(0xc2ab84), WET = new THREE.Color(0x5e4a35), soilCol = new THREE.Color();
   // ---- vines, leaves, the first female flower, the seedling, the hoop house, the heat-mat cloche, Grandpa's tin
   const vineMat = C(0x6f7f4a), vines = new THREE.Group(); root.add(vines);
-  const VINE_SEGS = [[GX, GZ - 1.6, GX - 0.4, GZ - 4.2], [GX - 0.4, GZ - 4.2, GX - 2.6, GZ - 4.4], [GX - 0.4, GZ - 4.2, GX + 2.4, GZ - 4.0], [GX, GZ, GX, GZ - 1.6]];
+  const VINE_SEGS: [number, number, number, number][] = [[GX, GZ - 1.6, GX - 0.4, GZ - 4.2], [GX - 0.4, GZ - 4.2, GX - 2.6, GZ - 4.4], [GX - 0.4, GZ - 4.2, GX + 2.4, GZ - 4.0], [GX, GZ, GX, GZ - 1.6]];
   for (const [x0, z0, x1, z1] of VINE_SEGS) part(CYL, vineMat, [(x0 + x1) / 2, gy + 0.08, (z0 + z1) / 2], [0.07, Math.hypot(x1 - x0, z1 - z0), 0.07], [PI / 2, 0, -Math.atan2(x1 - x0, z1 - z0)], vines);
   mergeLocal(vines);
   const leafGeo = new THREE.CircleGeometry(1, 6);
-  { const lp = leafGeo.attributes.position; for (let i = 1; i < lp.count; i++) { const f = i % 2 ? 1 : 0.72; lp.setXY(i, lp.getX(i) * f, lp.getY(i) * f); } }
+  { const lp = leafGeo.attributes.position; if (lp) for (let i = 1; i < lp.count; i++) { const f = i % 2 ? 1 : 0.72; lp.setXY(i, lp.getX(i) * f, lp.getY(i) * f); } }
   leafGeo.rotateX(-PI / 2); leafGeo.translate(0, 0, 0.5);
   const LEAVES = 26, leaves = pool(leafGeo, M(0xffffff, { side: THREE.DoubleSide }), LEAVES, true, root);
   const leafData = Array.from({ length: LEAVES }, (_, i) => {
-    const a = (i / LEAVES) * PI * 2, rad = r.rr(2.2, 3.4), [x0, z0, x1, z1] = VINE_SEGS[i % 4], u = r.rr(0.1, 1), off = r.rr(0.2, 0.55) * (i % 2 ? 1 : -1);
+    const a = (i / LEAVES) * PI * 2, rad = r.rr(2.2, 3.4), [x0, z0, x1, z1] = VINE_SEGS[i % VINE_SEGS.length] ?? [0, 0, 0, 0], u = r.rr(0.1, 1), off = r.rr(0.2, 0.55) * (i % 2 ? 1 : -1);
     const len = Math.hypot(x1 - x0, z1 - z0), nx = -(z1 - z0) / len, nz = (x1 - x0) / len;
     return { x: GX + Math.cos(a) * rad, z: GZ + Math.sin(a) * rad, vx: lerp(x0, x1, u) + nx * off, vz: lerp(z0, z1, u) + nz * off, s: r.rr(0.6, 0.85), y: r.rr(0.2, 0.55),
       rx: r.rr(-0.5, 0.2), ry: r.rand() * PI * 2, rz: r.rr(-0.3, 0.3), c: new THREE.Color(r.pick([0x7d9a6a, 0x6b8a5c, 0x8fa877, 0x78935f, 0x9aae7c])), k: r.rand() };
@@ -172,13 +194,13 @@ export default function createGiantView(K: Kit) {
   hose.position.set(GX, gy + 0.05, GZ); root.add(hose);
   // ---- shade sail: the cloth stretched over the posts, rolling out from the furled edge
   const sailGeo = new THREE.PlaneGeometry(SAIL.h * 2, SAIL.h * 2, 6, 6); sailGeo.rotateX(-PI / 2);
-  { const sp = sailGeo.attributes.position; for (let i = 0; i < sp.count; i++) { const u = sp.getX(i) / (2 * SAIL.h) + 0.5, v = sp.getZ(i) / (2 * SAIL.h) + 0.5; sp.setY(i, sailY(u, v) - 0.2 * Math.sin(u * PI) * Math.sin(v * PI)); } }
+  { const sp = sailGeo.attributes.position; if (sp) for (let i = 0; i < sp.count; i++) { const u = sp.getX(i) / (2 * SAIL.h) + 0.5, v = sp.getZ(i) / (2 * SAIL.h) + 0.5; sp.setY(i, sailY(u, v) - 0.2 * Math.sin(u * PI) * Math.sin(v * PI)); } }
   sailGeo.translate(SAIL.h, 0, 0); sailGeo.computeVertexNormals();             // pivot on the furled (west) edge
   const sail = part(sailGeo, M(0xece5d3, { side: THREE.DoubleSide }), [SAIL.x - SAIL.h, 0, SAIL.z], [1, 1, 1], [0, 0, 0], root);
   const furl = part(CYL8, C(0xe2dac6), [SAIL.x - SAIL.h + 0.12, sailY(0, 0.5) - 0.05, SAIL.z], [0.12, SAIL.h * 2, 0.12], [PI / 2, 0, 0], root);
   // ---- the sign: post + live canvas
   // [D] k < 1: her name is being painted on, left to right with the brush at its edge (MEET {NAME}); the "est." comes last
-  const sign = liveTex(256, 160, (g: { fillStyle: string; fillRect: (arg0: number,arg1: number,arg2: any,arg3: any) => void; strokeStyle: string; lineWidth: number; strokeRect: (arg0: number,arg1: number,arg2: number,arg3: number) => void; textAlign: string; font: string; measureText: (arg0: any) => { (): any; new(): any; width: number; }; fillText: (arg0: any,arg1: number,arg2: number) => void; save: () => void; beginPath: () => void; rect: (arg0: number,arg1: number,arg2: number,arg3: any) => void; clip: () => void; restore: () => void; arc: (arg0: number,arg1: number,arg2: number,arg3: number,arg4: number) => void; fill: () => void; globalAlpha: number; }, w: number, h: number, name: any, est: any, k = 1) => {
+  const sign = liveTex(256, 160, (g: CanvasRenderingContext2D, w: number, h: number, name: string, est: string, k: number = 1) => {
     g.fillStyle = '#3f4c43'; g.fillRect(0, 0, w, h);
     g.strokeStyle = '#b9a98c'; g.lineWidth = 10; g.strokeRect(5, 5, w - 10, h - 10);
     g.fillStyle = '#f3efe4'; g.textAlign = 'center';
@@ -211,7 +233,7 @@ export default function createGiantView(K: Kit) {
   mergeLocal(kelp); kelp.visible = false;
   // ---- [C] Moving Day (rulings R7, R18): the hoop house rises over her when she goes out; she droops under it while she
   // sulks (a foggy move), and perks up with a new leaf the morning she roots. And the tin's three taps (lid, nick, mat).
-  const MV = { hoopT: 1, perkT: 1, droop: 0, tin: 0, tinT: 1 };
+  const MV: { hoopT: number; perkT: number; droop: number; tin: number; tinT: number; sulkT?: number } = { hoopT: 1, perkT: 1, droop: 0, tin: 0, tinT: 1 };
   // ---- [C] syncDawnBees: the bees out at dawn, around her flower while the dawn card is up (8 on a clear dawn, 1 in fog):
   // one instanced cloud, at most 8 bees, one draw call
   const BEES = 8, bees = pool(new THREE.SphereGeometry(0.07, 6, 4).scale(1.3, 0.9, 0.9), M(0xf2c14e, { emissive: 0x3a2a00, emissiveIntensity: 0.25 }), BEES, false, root);
@@ -219,24 +241,25 @@ export default function createGiantView(K: Kit) {
   let beesShown = -1;
 
   let measureT = 1, lastLeaf = '', notesT = 0;
-  const lerpSize = (F: { size: number|null; }, want: number, dt: any) => { F.size = F.size == null ? want : lerp(F.size, want, damp(dt, 2.2)); };
-  function fruitSync(F: { pos: any; wob?: THREE.Group<THREE.Object3DEventMap>; body: any; mat: any; shell?: THREE.Mesh<any,any,THREE.Object3DEventMap>; stripes: any; scars: any; scald: any; crack: any; crackMat: any; stitches: any; gash: any; stache: any; twin: any; size: any; col: any; swell: any; shudder: any; }, p: { stage: string; name: string; est: number; wc: number; shade: boolean; color: string; shape: string; setDay: number; m: number; }|Giant, dt: number, t: number, s: State, show: boolean) {
+  const lerpSize = (F: { size: number | null }, want: number, dt: number) => { F.size = F.size == null ? want : lerp(F.size, want, damp(dt, 2.2)); };
+  function fruitSync(F: Fruit, p: Corner, dt: number, t: number, s: State | null | undefined, show: boolean) {
     F.pos.visible = show;
     if (!show) { F.size = null; return; }
     const day = s?.clock?.dayFrac ?? 0, live = p.split === 'blowout' ? 0 : (p.gain || 0) * day;
     lerpSize(F, sizeOf((p.wc || p.est || 0) + live), dt);
-    const blow = p.split === 'blowout', [sxz, sy] = SHAPES[p.shape] || SHAPES.round;
+    const blow = p.split === 'blowout', [sxz, sy] = own(SHAPES, p.shape ?? '') ?? SHAPES.round;
     const swell = 1 + 0.035 * Math.sin(Math.min(1, F.swell) * PI);
     F.swell = Math.max(0, F.swell - dt * 1.4);
-    F.body.scale.set(F.size * sxz * swell, F.size * sy * (blow ? 0.84 : 1) * swell, F.size * sxz * swell);
+    const sz = F.size ?? 0;
+    F.body.scale.set(sz * sxz * swell, sz * sy * (blow ? 0.84 : 1) * swell, sz * sxz * swell);
     // young fruit is green and ripens into her colour over three weeks
     const age = p.setDay != null && s?.clock ? (s.clock.day - p.setDay) : 60;
-    F.col.setHex(COLORS[p.color] ?? COLORS.O).lerp(GREEN, clamp(1 - age / 22, 0, 1) * 0.85);
+    F.col.setHex(own(COLORS, p.color ?? '') ?? COLORS.O).lerp(GREEN, clamp(1 - age / 22, 0, 1) * 0.85);
     if (blow) F.col.multiplyScalar(0.82);
     F.mat.color.copy(F.col);
     F.stripes.visible = !!p.stripe && age > 20;
     const sb = p.scarsBy || {};
-    F.scars.count = clamp((sb.crack || 0) + (sb.heist || 0) + (sb.scuff || 0) + (p.split === 'crack' && !sb.crack ? 2 : 0) + (p.scarsBy ? 0 : p.scars | 0), 0, 8);
+    F.scars.count = clamp((sb.crack || 0) + (sb.heist || 0) + (sb.scuff || 0) + (p.split === 'crack' && !sb.crack ? 2 : 0) + (p.scarsBy ? 0 : (p.scars ?? 0) | 0), 0, 8);
     F.scald.count = clamp(sb.sunscald || 0, 0, 3);
     F.gash.visible = blow;
     F.crack.visible = !!(p.creaking || p.softSpot) || p.split === 'crack';
@@ -251,14 +274,14 @@ export default function createGiantView(K: Kit) {
     F.shudder = Math.max(0, F.shudder - dt);
   }
 
-  function sync(s: State, dt: number, t: number) {
-    const legend = s === undefined || s?.giant === undefined || s?.clock?.phase === 'newgame';
-    const g = legend ? LEGEND : s.giant;
+  function sync(s: State | null, dt: number, t: number) {
+    const legend = s == null || s.giant == null || s.clock.phase === 'newgame';
+    const g: Corner = legend ? LEGEND : s.giant;
     if (!g) { root.visible = false; return; }
     root.visible = true;
     const stage = String(g.stage || 'none');
     const gone = /^(gone|carved|weighed)/.test(stage);
-    const fruit = !gone && (g.setDay != null || g.wc > 0 || /^(set|fruit|grown)/.test(stage));
+    const fruit = !gone && (g.setDay != null || (g.wc ?? 0) > 0 || /^(set|fruit|grown)/.test(stage));
     const culled = fruit && stage !== 'set';
     const d = s?.clock?.day ?? 150;
     // the seed's first weeks
@@ -271,7 +294,7 @@ export default function createGiantView(K: Kit) {
     cloche.visible = stage === 'started';
     if (up) {
       const n = clamp(Math.floor((d - (g.germDay ?? d)) / T.firsts.seedling.leafDays), 0, SEEDLING_LEAVES);
-      for (let i = 0; i < seedlings.length; i++) seedlings[i].visible = i === n;
+      seedlings.forEach((sg, i) => { sg.visible = i === n; });
       sprout.position.y = gy + (stage === 'sprout' ? 0.3 : 0.02);
       sprout.scale.setScalar(stage === 'sprout' ? 1.6 : 2);
     }
@@ -287,8 +310,7 @@ export default function createGiantView(K: Kit) {
     const leafKey = `${leafK.toFixed(2)}|${droop.toFixed(2)}`;
     if (leafKey !== lastLeaf) {
       lastLeaf = leafKey;
-      for (let i = 0; i < LEAVES; i++) {
-        const l = leafData[i];
+      for (const [i, l] of leafData.entries()) {
         if (l.k > leafK + 0.15 || leafK === 0) { hideAt(leaves, i); continue; }
         const k = clamp((leafK - l.k + 0.15) * 3, 0.3, 1), ring = leafK >= 1;
         dummy.position.set(ring ? l.x : l.vx, gy + l.y * (ring ? 1 : 0.7) * (1 - droop * 0.5), ring ? l.z : l.vz);
@@ -336,7 +358,7 @@ export default function createGiantView(K: Kit) {
     const blow = g.split === 'blowout';
     const name = blow ? 'THE ONE THAT GOT AWAY' : (g.name || (fruit ? 'Unnamed' : "Grandpa's corner")).toUpperCase();
     if (paintT < 1) paintT = Math.min(1, paintT + dt / SIGN_PAINT);
-    sign.paint(name, blow ? (g.name || '') : fruit ? estText(g.est) : g.seed?.short || (typeof g.seed === 'string' ? g.seed : 'growing...'),
+    sign.paint(name, blow ? (g.name || '') : fruit ? estText(g.est) : typeof g.seed === 'string' ? g.seed : g.seed?.short || 'growing...',
       Math.round(paintT * 48) / 48);
     // kelp on the beach
     const active = s?.events?.active || [];
@@ -345,7 +367,7 @@ export default function createGiantView(K: Kit) {
     syncDawnBees(s, stage, t, legend);
   }
   // ---- [C] Moving Day and the tin: the hoop rises, she droops while she sulks and perks up when she roots
-  function movingSync(g: { stage: string; name: string; est: number; wc: number; shade: boolean; color: string; shape: string; setDay: number; m: number; }|Giant, stage: string, d: number, dt: number, t: number, legend: boolean) {
+  function movingSync(g: Corner, stage: string, d: number, dt: number, t: number, legend: boolean) {
     if (stage === 'tin') {                         // the lid slides off on the first tap and stays off
       const k = MV.tin >= 1 ? 1 : 0;
       lid.position.set(lerp(0, 0.24, k), lerp(0.56, 0.44, k), 0); lid.rotation.z = -0.5 * k;
@@ -364,23 +386,24 @@ export default function createGiantView(K: Kit) {
     if (sprout.visible) sprout.scale.multiplyScalar((1 + perk) * (1 - 0.12 * MV.droop));
   }
   const easeOut = (k: number) => 1 - (1 - k) ** 3;
-  function syncDawnBees(s: State, stage: string, t: number, legend: boolean) {
-    const card = !legend && stage === 'flower' && s?.story?.cards?.[0]?.kind === 'pollinate' ? s.story.cards[0] : null;
-    const n = card ? clamp(card.data?.bees | 0, 0, BEES) : 0;
+  function syncDawnBees(s: State | null, stage: string, t: number, legend: boolean) {
+    const first = s?.story?.cards?.[0];
+    const card = !legend && stage === 'flower' && first?.kind === 'pollinate' ? first : null;
+    const n = card ? clamp(card.data.bees | 0, 0, BEES) : 0;
     bees.visible = n > 0;
     if (!n && beesShown === 0) return;
     beesShown = n;
     const bx = blossom.position.x, by = blossom.position.y, bz = blossom.position.z;
-    for (let i = 0; i < BEES; i++) {
+    for (const [i, b] of beeData.entries()) {
       if (i >= n) { hideAt(bees, i); continue; }
-      const b = beeData[i], a = b.a + t * b.w * (i % 2 ? 1 : -1);
+      const a = b.a + t * b.w * (i % 2 ? 1 : -1);
       dummy.position.set(bx + Math.cos(a) * b.r, by + b.h + Math.sin(t * 7 + i) * 0.05, bz + Math.sin(a) * b.r);
       dummy.rotation.set(0, -a, 0); dummy.scale.setScalar(n === 1 ? 1.6 : 1);   // one lonely bee is easy to spot
       dummy.updateMatrix(); bees.setMatrixAt(i, dummy.matrix);
     }
     bees.instanceMatrix.needsUpdate = true;
   }
-  function fx(ev: OutEvent) {
+  function fx(ev: FxEvent) {
     if (ev.type === 'giant/measure') { measureT = 0; }
     if (ev.type === 'giant/creak' || ev.type === 'giant/split') (ev.plot === 2 ? F2 : F1).shudder = ev.type === 'giant/split' ? 1.4 : 1;
     if (ev.type === 'giant/grow' && ev.gain >= 4) (ev.plot === 2 ? F2 : F1).swell = 1;
@@ -391,5 +414,5 @@ export default function createGiantView(K: Kit) {
     if (ev.type === 'giant/rooted' && ev.plot === 1) MV.perkT = 0;                             // [C] she roots: a perk
   }
   if (K.squashables) K.squashables.giant = F1.wob;
-  return { sync, fx, root, fruit: F1.body, fruitPos: F1.pos, sign, dispose() { scene.remove(root); disposeTree(root); brow?.parent?.remove(brow); } };
+  return { sync, fx, root, fruit: F1.body, fruitPos: F1.pos, sign, dispose() { scene.remove(root); disposeTree(root); } };
 }

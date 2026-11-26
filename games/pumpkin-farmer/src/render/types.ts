@@ -71,6 +71,7 @@ export interface LocalFx {
   'cast': { who: string; act: string; secs?: number };
   'hunt/start': { row: number; hunt: Hunt };
   'hunt/end': object;
+  'giant/tin': { step: number };
 }
 type LocalFxType = keyof LocalFx;
 /** What R.fx and every view hear: the sim's out-events and the UI's local effects. */
