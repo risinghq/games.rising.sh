@@ -2,14 +2,15 @@
 // sound cues are never the only signal (design §12 accessibility).
 //   play('ching', { pitch: 1.2 })  -> plays if sound is on; returns the caption text
 
-import { OutEvent } from '../sim/out-event';
-
 //   haptic(8)                       -> navigator.vibrate if haptics are on
-let ac: AudioContext|null = null, master: GainNode|null = null, noiseBuf: AudioBuffer|null = null, gestured = false;
-const S = { sound: true, haptics: true };
-const last = new Map();
+import type { OutEvent } from '../sim/out-event.js';
 
-export function configure(settings: { sound: any; haptics: any; }) { S.sound = !!settings.sound; S.haptics = !!settings.haptics; if (master) master.gain.value = S.sound ? 0.55 : 0; }
+let ac: AudioContext | null = null, master: GainNode | null = null, noiseBuf: AudioBuffer | null = null, gestured = false;
+const S = { sound: true, haptics: true };
+const last = new Map<string, number>();
+declare global { var webkitAudioContext: typeof AudioContext | undefined }
+
+export function configure(settings: { sound?: boolean; haptics?: boolean }) { S.sound = !!settings.sound; S.haptics = !!settings.haptics; if (master) master.gain.value = S.sound ? 0.55 : 0; }
 
 function ctx() {
   if (!gestured) return null;           // browsers refuse audio before the first tap or key; stay silent until then
@@ -32,12 +33,15 @@ const unlock = () => { gestured = true; if (S.sound) ctx(); };
 addEventListener('pointerdown', unlock, { capture: true, passive: true });
 addEventListener('keydown', unlock, { capture: true });
 
-function env(g: { gain: { setValueAtTime: (arg0: number,arg1: any) => void; exponentialRampToValueAtTime: (arg0: number,arg1: any) => void; }; }, t0: any, a: number, peak: number, dur: number) {
+function env(g: GainNode, t0: number, a: number, peak: number, dur: number) {
   g.gain.setValueAtTime(0.0001, t0);
   g.gain.exponentialRampToValueAtTime(peak, t0 + a);
   g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
 }
-function tone({ type = 'sine', f0, f1 = f0, dur = 0.15, a = 0.006, gain = 0.25, delay = 0, filter, vib }) {
+interface FilterOpts { type?: BiquadFilterType; f: number; q?: number }
+interface VibOpts { rate: number; depth: number }
+interface ToneOpts { type?: OscillatorType; f0: number; f1?: number; dur?: number; a?: number; gain?: number; delay?: number; filter?: FilterOpts; vib?: VibOpts }
+function tone({ type = 'sine', f0, f1 = f0, dur = 0.15, a = 0.006, gain = 0.25, delay = 0, filter, vib }: ToneOpts) {
   const c = ctx(); if (!c) return;
   const t0 = c.currentTime + delay, o = c.createOscillator(), g = c.createGain();
   o.type = type;
@@ -45,23 +49,25 @@ function tone({ type = 'sine', f0, f1 = f0, dur = 0.15, a = 0.006, gain = 0.25, 
   if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + dur);
   if (vib) { const l = c.createOscillator(), lg = c.createGain(); l.frequency.value = vib.rate; lg.gain.value = vib.depth; l.connect(lg); lg.connect(o.frequency); l.start(t0); l.stop(t0 + dur + 0.05); }
   env(g, t0, a, gain, dur);
-  let n = o;
+  let n: AudioNode = o;
   if (filter) { const f = c.createBiquadFilter(); f.type = filter.type || 'lowpass'; f.frequency.value = filter.f; f.Q.value = filter.q || 1; o.connect(f); n = f; }
-  n.connect(g); g.connect(master);
+  n.connect(g); if (master) g.connect(master);
   o.start(t0); o.stop(t0 + dur + 0.05);
 }
-function noise({ dur = 0.2, gain = 0.2, f = 1200, f1 = f, q = 1, type = 'bandpass', delay = 0, a = 0.005 }) {
+interface NoiseOpts { dur?: number; gain?: number; f?: number; f1?: number; q?: number; type?: BiquadFilterType; delay?: number; a?: number }
+function noise({ dur = 0.2, gain = 0.2, f = 1200, f1 = f, q = 1, type = 'bandpass', delay = 0, a = 0.005 }: NoiseOpts) {
   const c = ctx(); if (!c) return;
   const t0 = c.currentTime + delay, src = c.createBufferSource(), flt = c.createBiquadFilter(), g = c.createGain();
   src.buffer = noiseBuf; flt.type = type; flt.Q.value = q;
   flt.frequency.setValueAtTime(f, t0);
   if (f1 !== f) flt.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
   env(g, t0, a, gain, dur);
-  src.connect(flt); flt.connect(g); g.connect(master);
+  src.connect(flt); flt.connect(g); if (master) g.connect(master);
   src.start(t0, Math.random() * 0.5); src.stop(t0 + dur + 0.05);
 }
 
-const SOUNDS = {
+interface SoundOpts { pitch?: number }
+const SOUNDS: Record<string, (o?: SoundOpts) => void> = {
   tick: () => tone({ type: 'triangle', f0: 920, f1: 700, dur: 0.045, gain: 0.07 }),
   ching: ({ pitch = 1 } = {}) => {
     tone({ type: 'triangle', f0: 1568 * pitch, dur: 0.45, gain: 0.16 });
@@ -93,17 +99,20 @@ const SOUNDS = {
   // dialogue babble: one soft syllable, pitched per speaker
   babble: ({ pitch = 1 } = {}) => tone({ type: 'triangle', f0: 420 * pitch * (0.92 + Math.random() * 0.16), f1: 360 * pitch, dur: 0.055, gain: 0.05 }),
 };
-const CAPTIONS = {
+const CAPTIONS: Record<string, string> = {
   ching: 'ching!', pop: 'pop', plink: 'plink', squish: 'squish', creak: 'a low creak...', foghorn: 'BWAAAMP (foghorn)', thunk: 'thunk',
   chant: 'the crowd chants', alert: 'ding-dong', toot: 'toot toot', bark: 'woof!', buzz: 'bzzz',
 };
 const QUIET = new Set(['tick', 'babble', 'open', 'close', 'goal', 'done']);
 
-export function play(name: string|undefined, opts?: OutEvent|undefined) {
+export function play(name: string | undefined, opts: OutEvent | SoundOpts = {}) {
+  if (name === undefined) return null;
   const now = performance.now();
   if (now - (last.get(name) || 0) < (name === 'babble' ? 50 : 35)) return null;  // no machine-gunning
   last.set(name, now);
-  if (S.sound && SOUNDS[name]) { try { SOUNDS[name](opts || {}); } catch { /* audio is best effort */ } }
+  const fn = SOUNDS[name];
+  const pitch = 'pitch' in opts && typeof opts.pitch === 'number' ? opts.pitch : undefined;
+  if (S.sound && fn) { try { fn({ pitch }); } catch { /* audio is best effort */ } }
   return QUIET.has(name) ? null : CAPTIONS[name] || null;
 }
 // (only after the player has touched the page: browsers refuse, and complain in the console, before that)

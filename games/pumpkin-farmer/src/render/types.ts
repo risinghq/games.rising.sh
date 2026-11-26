@@ -21,7 +21,7 @@ export interface Projected { x: number; y: number; visible: boolean }
 export interface PhotoOpts { crisp?: boolean; focus?: { x: number; y?: number; z: number } | null; tight?: number }
 
 export interface RendererCam {
-  glide(x: number, z: number, zoom?: number, ms?: number): void;
+  glide(x: number, z: number, zoom?: number, ms?: number, az?: number, polar?: number): void;
   frame(kind: string): unknown;
   home(ms?: number): void;
   setInset(px?: number, top?: number, right?: number): void;
