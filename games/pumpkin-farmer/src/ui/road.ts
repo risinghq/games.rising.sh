@@ -8,20 +8,21 @@ import { el, icon } from './dom.js';
 import { road } from '../sim/story.js';
 import { makeCtx } from '../sim/game.js';
 import { ROAD, whenText, daysText } from '../sim/road-lines.js';
-import type { State } from '../sim/types.js';
+import type { DatedStop } from '../sim/road-lines.js';
+import type { Action, State } from '../sim/types.js';
 import type { Api } from './types.js';
 
 // The next stop worth naming: the Road's next stop not yet reached (story.nextStop), skipping one whose ROAD entry says it
 // won't come on this farm (no rows, no bugs).
-export function stopAhead(s: State, ctx = makeCtx(s)) {
+export function stopAhead(s: State, ctx = makeCtx(s)): DatedStop | null {
   const d = s.clock.day;
-  return road(s, ctx).find((x) => !x.done && x.day != null && x.day >= d && (ROAD[x.id]?.when?.(s) ?? true)) || null;
+  return road(s, ctx).find((x): x is DatedStop => !x.done && x.day != null && x.day >= d && (ROAD[x.id]?.when?.(s) ?? true)) || null;
 }
 // The stop the chip shows, or null: in the growing months, whenever there is no goal (pure: tests/sim/road.test.js).
 export const chipStop = (s: State, ctx = makeCtx(s)) => (s.clock.phase === 'grow' && !s.story.goal ? stopAhead(s, ctx) : null);
 // The chip's ⏭: the dock's Skip with this stop as its target. A stop that says "Today" (a lesson waiting out the gap after
 // the last one) skips to it too, and no further than tomorrow: a tap that did nothing would read as a broken button.
-export const chipSkip = (stop: { day: number; }, day: number) => ({ type: 'clock/skip', to: Math.max(stop.day, day + 1), quiet: true });
+export const chipSkip = (stop: { day: number; }, day: number): Action => ({ type: 'clock/skip', to: Math.max(stop.day, day + 1), quiet: true });
 
 // What road() depends on, so the stop is only looked up when one of these changes (not every frame).
 const keyOf = (s: State) => {
@@ -35,8 +36,8 @@ export function createNextStop(api: Api, host: Element|null) {
   const node = el('button.goal.nextstop', { 'data-target': 'hud:nextstop', 'aria-label': 'Next stop' },
     el('span.ns-text', {}, when, el('span.ns-dot', { text: '·' }), title), el('span.ns-skip', { html: icon('skip') }));
   node.hidden = true;
-  host.append(node);
-  let key: string|null = null, stop: number|{ id: any; kind: string; day: any; est: boolean; done: boolean; title: any; why: any; icon: any; }|null = null, shown: string|null = null;
+  host?.append(node);
+  let key: string|null = null, stop: DatedStop|null = null, shown: string|null = null;
   node.addEventListener('click', () => {
     const s = api.s();
     if (!s || !stop) return;
@@ -51,11 +52,11 @@ export function createNextStop(api: Api, host: Element|null) {
       const k = keyOf(s);
       if (k !== key) { key = k; stop = s.clock.phase === 'grow' ? stopAhead(s) : null; }
       const show = !!stop && !goalShown && !s.story.goal && s.clock.phase === 'grow';
-      const sig = show ? `${stop.id}|${stop.day}|${s.clock.day}|${s.clock.speed > 4}` : '';
+      const sig = show && stop ? `${stop.id}|${stop.day}|${s.clock.day}|${s.clock.speed > 4}` : '';
       if (sig === shown) return;
       shown = sig;
       node.hidden = !show;
-      if (!show) return;
+      if (!show || !stop) return;
       when.textContent = whenText(stop, s.clock.day);
       title.textContent = stop.title;
       node.classList.toggle('skipping', s.clock.speed > 4);

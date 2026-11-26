@@ -1,19 +1,24 @@
 // The title screen (Continue / New farm / Settings over the slowly orbiting diorama), the new-farm flow (Mayor
 // Pouch on the dock -> meet Marlene (named as the fog while the 3D fog rolls in) -> species with live preview
 // -> surname -> farm name, the stand sign repaints -> the fog curtain lifts), and the menu, settings and help sheets (design §12 screen flow).
-import { $, el, icon, fmt } from './dom.js';
+import { $, el, icon, fmt, need } from './dom.js';
 import { registerSheet } from './registry.js';
 import { portraitEl } from './dialog.js';
 import { LINES, SPEAKERS, SPECIES, SURNAMES, DEFAULT_FARM, line } from '../sim/story.js';
 import { T } from '../sim/tuning.js';
 import type { State } from '../sim/types.js';
-import type { Api } from './types.js';
+import type { Api, Settings } from './types.js';
+
+/** The save summary the title's Continue button shows. */
+interface SaveInfo { farm: string; year: number; when: string }
+/** Speaker entries by id, for rows that store only the id. */
+const SPEAKER_NAMES: Record<string, { name: string }> = SPEAKERS;
 
 // ------------------------------------------------------------ title
-export function showTitle(app: { R?: any; settings?: any; params?: {}; game?: null; preview?: null; mode?: string; touchedAt?: number; lastInput?: number; lastAlert?: number; continueGame?: any; newFarm?: any; api?: any; }, { save } = {}) {
-  const root = $('#title');
+export function showTitle(app: { api: Api; continueGame?: () => void; newFarm?: () => void }, { save }: { save?: SaveInfo | null } = {}) {
+  const root = need('#title');
   root.innerHTML = '';
-  const cont = save ? el('button.btn.primary.cont', { onclick: () => app.continueGame() },
+  const cont = save ? el('button.btn.primary.cont', { onclick: () => app.continueGame?.() },
     el('span', { text: 'Continue' }), el('span.sub', { text: `${save.farm} · Year ${save.year} · ${save.when}` })) : null;
   root.append(
     el('div.veil'),
@@ -23,7 +28,7 @@ export function showTitle(app: { R?: any; settings?: any; params?: {}; game?: nu
       el('p', { text: 'The sun shows up about a quarter of the time. The rest belongs to Marlene, our fog.' })),
     el('div.title-bottom', {},
       el('div.card.title-card', {}, cont,
-        el('button.btn', { class: save ? null : 'primary', onclick: () => app.newFarm() }, el('span', { html: icon('pumpkin') }), 'New farm'),
+        el('button.btn', { class: save ? null : 'primary', onclick: () => app.newFarm?.() }, el('span', { html: icon('pumpkin') }), 'New farm'),
         el('button.btn.ghost', { onclick: () => app.api.openSheet('settings') }, el('span', { html: icon('settings') }), 'Settings')),
       el('div.title-foot', { text: 'v1 · best with sound on' })));
   document.body.classList.add('on-title');
@@ -32,36 +37,36 @@ export function showTitle(app: { R?: any; settings?: any; params?: {}; game?: nu
 // The diorama orbits in the clear band between the title and the buttons.
 export function frameTitle(api: Api) {
   const head = $('#title .title-head')?.getBoundingClientRect(), card = $('#title .title-card')?.getBoundingClientRect();
-  if (head && card) api.R?.cam?.setInset?.(innerHeight - card.top + 8, head.bottom + 8, 0);
+  if (head && card) api.R?.cam.setInset(innerHeight - card.top + 8, head.bottom + 8, 0);
 }
-export function hideTitle() { $('#title').innerHTML = ''; document.body.classList.remove('on-title'); }
+export function hideTitle() { const t = $('#title'); if (t) t.innerHTML = ''; document.body.classList.remove('on-title'); }
 
 // ------------------------------------------------------------ new farm
 // The flow edits a real 'newgame' state through newgame/set, so the renderer shows the choice live (the farmer
 // changes species on the dock, the stand sign repaints) before newgame/start lifts the fog.
-export function newFarmFlow(app: { R?: any; settings?: any; params?: {}; game?: null; preview?: null; mode?: string; touchedAt?: number; lastInput?: number; lastAlert?: number; api?: any; }, s: State, onDone: { (): void; (): void; }) {
-  const api = app.api, root = $('#title');
+export function newFarmFlow(app: { api: Api }, s: State, onDone: () => void) {
+  const api = app.api, root = need('#title');
   const steps = ['welcome', 'marlene', 'species', 'surname', 'farm'];
   let i = 0, picked = false;
   root.innerHTML = '';
   const card = el('div.card.newfarm');
   root.append(el('div.veil', { style: { background: 'linear-gradient(180deg, rgba(211,220,219,0.55), rgba(211,220,219,0) 30%, rgba(211,220,219,0) 55%, rgba(211,220,219,0.85))' } }), el('div'), card);
-  api.R.cam?.title?.(false);
+  api.R.cam.title?.(false);
 
   const say = (text: string) => el('div.say', {}, portraitEl(api, 'mayor', s), el('div', {}, el('div.who', { text: SPEAKERS.mayor.name }), el('div.line', { text })));
-  const nav = (primary: string|any[]|null|undefined, onNext: { (): void; (): void; (): void; (): void; (): void; }, back = true) => el('div.nav', {},
+  const nav = (primary: string, onNext: () => void, back = true) => el('div.nav', {},
     back && i > 0 ? el('button.btn', { 'aria-label': 'Back', onclick: () => go(i - 1), html: icon('back') }) : null,
     el('button.btn.primary', { onclick: onNext }, primary, el('span', { html: icon('next') })));
 
   // keep the camera's subject (the Mayor and your farmer on the dock, then the stand's sign) in the clear area
   // above the card; the card's height changes per step, so frame after it is laid out
   const frameAbove = (kind: string) => requestAnimationFrame(() => {
-    api.R.cam?.setInset?.(innerHeight - card.getBoundingClientRect().top + 12, 0, 0);
-    if (api.settings.reduceMotion) api.R.cam?.frame?.(kind, 0); else api.R.cam?.frame?.(kind, kind === shot ? 450 : 1100);
+    api.R.cam.setInset(innerHeight - card.getBoundingClientRect().top + 12, 0, 0);
+    if (api.settings.reduceMotion) api.R.cam.frame?.(kind, 0); else api.R.cam.frame?.(kind, kind === shot ? 450 : 1100);
     shot = kind;
   });
-  let shot: null = null;
-  let fogT: number|null|undefined = null;
+  let shot: string | null = null;
+  let fogT: ReturnType<typeof setTimeout> | undefined;
   function go(k: number) {
     i = k;
     clearTimeout(fogT);
@@ -90,7 +95,7 @@ export function newFarmFlow(app: { R?: any; settings?: any; params?: {}; game?: 
       const lineEl = el('div.line', { text: picked ? line(s, LINES.mayor.species) : LINES.mayor.who });
       const grid = el('div.species-grid', { role: 'radiogroup', 'aria-label': 'Your species' }, T.species.list.map((sp) =>
         el('button.sp', { class: picked && s.meta.species === sp ? 'on' : null, role: 'radio', 'aria-checked': String(picked && s.meta.species === sp),
-          onclick: (e: { currentTarget: Element; }) => {
+          onclick: (e) => {
             api.dispatch({ type: 'newgame/set', species: sp });
             picked = true;
             grid.querySelectorAll('.sp').forEach((b) => { b.classList.toggle('on', b === e.currentTarget); b.setAttribute('aria-checked', String(b === e.currentTarget)); });
@@ -105,16 +110,18 @@ export function newFarmFlow(app: { R?: any; settings?: any; params?: {}; game?: 
         }));
     } else if (step === 'surname') {
       const input = el('input.field', { value: s.meta.surname, maxlength: 18, autocomplete: 'off', autocapitalize: 'words', 'aria-label': 'Family name', enterkeyhint: 'next' });
+      if (!(input instanceof HTMLInputElement)) return;
       const commit = () => api.dispatch({ type: 'newgame/set', surname: input.value });
       input.addEventListener('input', commit);
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { commit(); go(4); } });
       const dice = el('button.iconbtn', { 'aria-label': 'Suggest a name', html: icon('dice'), onclick: () => {
         const opts = SURNAMES.filter((n) => n !== input.value);
-        input.value = opts[Math.floor(Math.random() * opts.length)]; commit(); api.sound('plink');
+        input.value = opts[Math.floor(Math.random() * opts.length)] ?? input.value; commit(); api.sound('plink');
       } });
       card.append(say(LINES.mayor.surname), el('div.controls', {}, el('div.namefield', {}, input, dice)), nav('Next', () => { commit(); go(4); }));
     } else {
       const input = el('input.field', { value: s.meta.farmName, maxlength: 32, autocomplete: 'off', autocapitalize: 'words', 'aria-label': 'Farm name', enterkeyhint: 'done' });
+      if (!(input instanceof HTMLInputElement)) return;
       const commit = () => api.dispatch({ type: 'newgame/set', farmName: input.value || DEFAULT_FARM });
       input.addEventListener('input', commit);
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter') finish(); });
@@ -128,8 +135,8 @@ export function newFarmFlow(app: { R?: any; settings?: any; params?: {}; game?: 
 // ------------------------------------------------------------ menu, settings, help
 registerSheet('menu', {
   title: (s: State) => s.meta.farmName, eyebrow: (s: State) => `${s.meta.surname} farm · Year ${s.clock.year}`,
-  build(body, s: State, arg, api: Api) {
-    const item = (ic: string, title: string, desc: string, fn: { (): void; (): void; (): void; (): void; (): void; (): void; }, cls?: undefined) => el('button.row-item', { class: cls || null, onclick: fn },
+  build(body, s: State, _arg, api: Api) {
+    const item = (ic: string, title: string, desc: string, fn: () => void, cls?: string) => el('button.row-item', { class: cls || null, onclick: fn },
       el('span', { html: icon(ic) }), el('div.grow', {}, el('div.title', { text: title }), desc ? el('div.desc', { text: desc }) : null), el('span', { html: icon('next', 's') }));
     body.append(el('div.menu-grid', {},
       item('ledger', 'Ledger', `${fmt.money(s.cash)} in the tin`, () => api.openSheet('ledger')),
@@ -145,13 +152,15 @@ registerSheet('scrapbook', {
   title: () => 'Scrapbook', eyebrow: (s: State) => s.meta.farmName,
   build(body, s: State) {
     const pages = s.scrapbook || [];
-    body.append(pages.length ? pages.map((p) => el('div.row-item', {}, el('span', { html: icon('scrapbook') }),
+    body.append(...(pages.length ? pages.map((p) => el('div.row-item', {}, el('span', { html: icon('scrapbook') }),
       el('div.grow', {}, el('div.title', { text: `Year ${p.year}: ${p.headline || ''}` }), el('div.desc', { text: p.name ? `${p.name} · ${p.weight ? fmt.lb(p.weight) : ''}` : '' }))))
-      : el('div.empty-note', { html: `${icon('scrapbook')}<span>Your first page is printed after the weigh-off: one photo, one headline, one year.</span>` }));
+      : [el('div.empty-note', { html: `${icon('scrapbook')}<span>Your first page is printed after the weigh-off: one photo, one headline, one year.</span>` })]));
   },
 });
 
-const SETTINGS = [
+/** The boolean settings the Settings sheet lists as toggles. */
+type BoolSetting = { [K in keyof Settings]: Settings[K] extends boolean ? K : never }[keyof Settings];
+const SETTINGS: [BoolSetting, string, string][] = [
   ['sound', 'Sound', 'Synthesised blips and the foghorn'],
   ['haptics', 'Haptics', 'A little buzz on every tap'],
   ['captions', 'Captions', 'Show a caption for every sound cue'],
@@ -163,7 +172,7 @@ const SETTINGS = [
 ];
 registerSheet('settings', {
   title: () => 'Settings',
-  build(body, s, arg, api: Api) {
+  build(body, _s, _arg, api: Api) {
     const st = api.settings;
     for (const [key, title, desc] of SETTINGS) {
       const t = el('button.toggle', { class: st[key] ? 'on' : null, role: 'switch', 'aria-checked': String(!!st[key]), 'aria-label': title });
@@ -172,7 +181,7 @@ registerSheet('settings', {
       body.append(el('div.setting.tap', { onclick: () => t.click() }, el('div.grow', {}, el('div.title', { text: title }), el('div.desc', { text: desc })), t));
     }
     const seg = el('div.seg', { role: 'group', 'aria-label': 'Text size' }, T.ui.textScale.map((v) => el('button', { class: st.textScale === v ? 'on' : null, text: `${Math.round(v * 100)}%`,
-      onclick: (e: { currentTarget: HTMLButtonElement; }) => { api.setSetting('textScale', v); seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === e.currentTarget)); } })));
+      onclick: (e) => { api.setSetting('textScale', v); seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === e.currentTarget)); } })));
     body.append(el('div.setting', {}, el('div.grow', {}, el('div.title', { text: 'Text size' })), seg));
   },
 });
@@ -181,13 +190,13 @@ const CONTROLS_TOUCH = [['Drag', 'pan the farm'], ['Pinch', 'zoom'], ['Twist', '
 const CONTROLS_KEYS = [['Space', 'pause'], ['1 2 4', 'speed'], ['S', 'skip'], ['R', 'ring up'], ['W', 'water the patch'], ['G P B L T', 'giant, patch, barn, lot, stand'], ['A', 'almanac'], ['H', 'home view'], ['F', 'stroll'], ['Esc', 'close']];
 registerSheet('help', {
   title: () => 'Help',
-  build(body, s: State, arg, api: Api) {
+  build(body, s: State, _arg, api: Api) {
     const seen = Object.entries(s.story.replay || {});
     body.append(el('div.section', {}, el('div.eyebrow', { text: 'Replay a tutorial' }),
       seen.length ? seen.map(([id, r]) => el('button.row-item', { onclick: () => { api.closeSheet(); api.dispatch({ type: 'story/replay', id }); } },
-        portraitEl(api, r.speaker, s), el('div.grow', {}, el('div.title', { text: SPEAKERS[r.speaker]?.name || r.speaker }), el('div.desc', { text: r.lines[0] })), el('span', { html: icon('play', 's') })))
+        portraitEl(api, r.speaker, s), el('div.grow', {}, el('div.title', { text: SPEAKER_NAMES[r.speaker]?.name || r.speaker }), el('div.desc', { text: r.lines[0] ?? '' })), el('span', { html: icon('play', 's') })))
         : el('div.empty-note', { text: 'Townsfolk will drop by as the year goes on. Anything they teach you can be replayed here.' })));
-    const keys = (list: string[][]|[any,any][]) => list.map(([k, v]) => el('div.ledger-row', {}, el('span', {}, ...k.split(' ').map((x: any) => el('span.kbd', { text: x })), ' '), el('span.muted', { text: v })));
+    const keys = (list: string[][]) => list.map(([k, v]) => el('div.ledger-row', {}, el('span', {}, ...(k || '').split(' ').map((x) => el('span.kbd', { text: x })), ' '), el('span.muted', { text: v || '' })));
     body.append(el('div.section', {}, el('div.eyebrow', { text: 'Touch' }), keys(CONTROLS_TOUCH)));
     if (matchMedia('(hover: hover)').matches) body.append(el('div.section', {}, el('div.eyebrow', { text: 'Keyboard' }), keys(CONTROLS_KEYS)));
   },

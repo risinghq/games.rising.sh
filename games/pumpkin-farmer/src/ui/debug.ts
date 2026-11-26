@@ -1,6 +1,6 @@
 // The ?debug overlay (design §14 human playtest hooks): phase, day, 1x clock, current beat and goal, the event log,
 // actions per minute, FPS, draw calls and RNG stream positions, so human runs can be compared with bot targets.
-import { $ } from './dom.js';
+import { need } from './dom.js';
 import { label, clockLabel } from '../sim/calendar.js';
 import { isHeld, isBlocked } from '../sim/game.js';
 import { hashState } from '../sim/save.js';
@@ -10,7 +10,7 @@ import type { Api } from './types.js';
 const mmss = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 
 export function createDebug(api: Api) {
-  const root = $('#debug');
+  const root = need('#debug');
   root.hidden = false;
   let frames = 0, fps = 0, t0 = performance.now(), n = 0, beat = '-', hash = '';
   const actions: number[] = [];
@@ -22,9 +22,9 @@ export function createDebug(api: Api) {
       frames++;
       if (now - t0 > 500) { fps = (frames * 1000) / (now - t0); frames = 0; t0 = now; }
       if (n++ % 8) return;
-      while (actions.length && now - actions[0] > 60000) actions.shift();
+      while (actions.length && now - (actions[0] ?? now) > 60000) actions.shift();
       if (n % 240 === 1) hash = hashState(s);
-      const c = s.clock, st = api.R?.info?.() || api.R?.stats?.();
+      const c = s.clock, st = api.R.info();
       root.textContent = [
         `${c.phase}${c.sub ? '/' + c.sub : ''}  Y${c.year} ${label(Math.min(c.day, 213))}${c.phase === 'october' && c.minute ? ' ' + clockLabel(c.minute) : ''}`,
         `1x ${mmss(c.clock1x)}  speed ${c.speed}${isHeld(s) ? ' held' : ''}${isBlocked(s) ? ' blocked' : ''}`,

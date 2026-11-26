@@ -9,14 +9,15 @@ import { quiet } from '../sim/story.js';
 import { makeCtx } from '../sim/game.js';
 import { T } from '../sim/tuning.js';
 import type { State } from '../sim/types.js';
+import type { Settings } from './types.js';
 
-export function planningOpen(s: State, sheetId: string|null, arg: any) {
+export function planningOpen(s: State, sheetId: string|null, arg: unknown) {
   const when = sheetId && REG.planning.get(sheetId);
   if (!when) return false;
   try { return !!when(s, arg); } catch { return false; }
 }
 // ui: { sheetId, sheetArg, settings, livePins (DOM pins on screen now), quietNow (quiet(s) if the caller has it cached) }
-export function clockMul(s: State, { sheetId = null, sheetArg, settings = {}, livePins = 0, quietNow } = {}) {
+export function clockMul(s: State | null, { sheetId = null, sheetArg, settings = {}, livePins = 0, quietNow }: { sheetId?: string | null; sheetArg?: unknown; settings?: Partial<Settings>; livePins?: number; quietNow?: boolean } = {}) {
   if (!s) return 1;
   if (planningOpen(s, sheetId, sheetArg)) return 0;
   const c = s.clock;

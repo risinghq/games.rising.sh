@@ -98,6 +98,7 @@ export interface PinDef {
   pos(s: State): At | null;
   onTap(api: Api): void;
   urgent?(s: State): boolean;
+  cls?: string;
 }
 /** The weekend override for the Row/Barn sheets' Cut/Restock buttons (ui/patch.js's rowHooks). */
 export type WeekendHook = (api: Api, row: number | undefined, what: string) => void;
@@ -126,55 +127,45 @@ export interface HandsKit {
   api: Api;
   R: Renderer;
   arg: unknown;
-  /** the ring's seconds (0: no countdown) */
+  /** seconds left on the ring */
   timer: number;
   /** seconds left on the ring */
   left(): number;
-  /** end the verb: its finish() action goes to the sim, then ended() shows */
-  end(reason: string): void;
-  /** a line in the hint strip, with a speaker's face when named */
   hint(text: string, speaker?: string): void;
-  /** the count on the strip ('' clears it) */
   count(text: string): void;
-  /** the one combo badge over the last touch ('' clears it) */
   combo(text: string, at?: { x: number; y: number }): void;
-  /** the ending's word, centred */
   big(text: string, cls?: string): void;
-  /** container-relative CSS px of a world point */
+  /** world to screen: container-relative CSS px */
   project(x: number, y: number, z: number): Projected;
-  /** the ground point under a screen point, or null */
+  /** screen px to the world point under the finger, or null */
   ground(px: number, py: number): { x: number; z: number } | null;
   juice: {
-    ripple(x: number, z: number, color: number): void;
-    pop(x: number, y: number, z: number, color: number, n: number, sparkles?: number): void;
-    sparkle(x: number, y: number, z: number, n: number): void;
-    float(text: string, x: number, y: number, z: number, cls: string): void;
-    /** a pitch-stepped blip: a semitone a step */
+    ripple(x: number, z: number, color?: number): void;
+    pop(x: number, y: number, z: number, color?: number, n?: number, sparkles?: number): void;
+    sparkle(x: number, y: number, z: number, n?: number): void;
+    float(text: string, x: number, y: number, z: number, cls?: string): void;
     blip(name: string, step?: number): void;
     buzz(ms: number): void;
   };
+  /** ends the close-up: the finish action is dispatched, the ending shows, the camera goes back */
+  end(reason: string): void;
 }
-/** A hands-on close-up verb; registers with registerHands, opens with openHands (hands.ts). */
+
+/** A hands-on close-up verb; the sim side is hands/open { verb } and hands/close. */
 export interface HandsDef {
   id: string;
-  /** the hint strip's face while the verb talks */
+  /** whose face the hint strip shows */
   speaker?: string;
-  /** where the camera sits for the verb (s is null before the game starts) */
+  /** where the camera frames the subject */
   frame(s: State | null, arg: unknown): HandsFrame;
-  /** the strip's opening line */
   hint(s: State | null, arg: unknown): string;
-  /** the ring's seconds; unset or 0: no countdown */
+  /** seconds on the ring; no timer means none */
   timer?(api: Api): number;
   start(K: HandsKit, arg: unknown): void;
-  /** a touch at CSS px { x, y } */
   down(pt: { x: number; y: number }, K: HandsKit): void;
-  /** pointer drag/release while the verb runs; hands.ts does not forward these yet */
-  move?(e: PointerEvent): void;
-  up?(e: PointerEvent): void;
   update(dt: number, K: HandsKit): void;
-  /** the verb's one action, dispatched when it ends */
-  finish(K: HandsKit): Action;
-  /** after the action: res is its result, reason is 'done' | 'timer' | the verb's own */
-  ended?(res: ActionResult, K: HandsKit, reason: string): void;
+  /** the action the ending dispatches; null means nothing to dispatch */
+  finish(K: HandsKit): Action | null;
+  ended?(res: ActionResult & { events: OutEvent[] }, K: HandsKit, reason: string): void;
   close?(K: HandsKit): void;
 }

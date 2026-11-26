@@ -1,6 +1,6 @@
 // The bottom tray (design §12): the station bar (56px) above the dock (64px) with speed controls on the left and
 // the contextual FAB on the right, in the thumb zone. Stations and FAB modes come from the registries.
-import { $, el, icon } from './dom.js';
+import { el, icon, need } from './dom.js';
 import { REG } from './registry.js';
 import { speedRules } from '../sim/game.js';
 import { T } from '../sim/tuning.js';
@@ -8,14 +8,16 @@ import type { Action, State } from '../sim/types.js';
 import type { Api, FabDef } from './types.js';
 
 // what the dock says in the beat-driven phases, where there are no speed controls
-const NOTES = {
+const NOTES: Record<string, (s: State) => string> = {
   weighoff: (s: State) => (s.weighoff?.stage === 'eve' ? 'The eve of the weigh-off. Big day tomorrow.' : 'Weigh-off day. The Weighmaster awaits.'),
   halloween: () => 'Halloween night on the farm.', winter: () => 'Winter. The farm sleeps until spring.',
 };
 
+const SPEEDS: [0, 1, 2, 4] = [0, 1, 2, 4];
+
 export function createDock(api: Api) {
-  const stationsEl = $('#stations'), dock = $('#dock');
-  const sp = (k: string, html: string, tip: string, act: () => Action) => el('button', { data: { k }, html, 'aria-label': tip, 'data-tip': tip, onclick: () => api.dispatch(act()) });
+  const stationsEl = need('#stations'), dock = need('#dock');
+  const sp = (k: string | number, html: string, tip: string, act: () => Action) => el('button', { data: { k }, html, 'aria-label': tip, 'data-tip': tip, onclick: () => api.dispatch(act()) });
   const B = {
     0: sp('0', icon('pause'), 'Pause (Space)', () => ({ type: 'clock/pause', on: true })),
     1: sp('1', '1x', 'Normal speed (1)', () => ({ type: 'clock/speed', speed: 1 })),
@@ -31,7 +33,7 @@ export function createDock(api: Api) {
   const fab = el('button.fab', { 'aria-label': 'Action' });
   dock.append(speed, note, home, fab);
 
-  let fabDef: FabDef|null = null, sig = {}, nudge = false;
+  let fabDef: FabDef|null = null, sig: Record<string, string | boolean> = {}, nudge = false;
   fab.addEventListener('click', () => fabDef?.onTap(api));
 
   function syncSpeed(s: State) {
@@ -41,7 +43,7 @@ export function createDock(api: Api) {
     speed.hidden = !r.speeds.length;
     note.hidden = !!r.speeds.length;
     note.textContent = NOTES[s.clock.phase]?.(s) ?? '';
-    for (const k of [0, 1, 2, 4]) { B[k].hidden = !r.speeds.includes(k); B[k].classList.toggle('on', v === k); }
+    for (const k of SPEEDS) { B[k].hidden = !r.speeds.includes(k); B[k].classList.toggle('on', v === k); }
     B.skip.hidden = !r.skip;
     B.skip.classList.toggle('on', v === T.clock.skip);
     const tip = s.clock.sub === 'weekday' ? 'Skip to Saturday (S)' : 'Skip to the next thing (S)';
@@ -75,16 +77,18 @@ export function createDock(api: Api) {
     const key = vis.map((d) => `${d.id}:${d.badge?.(s) ?? ''}`).join(',') + '|' + open;
     if (key === sig.st) return;
     sig.st = key;
-    const have = new Map([...stationsEl.children].map((n) => [n.dataset.id, n]));
+    const have = new Map<string, HTMLElement>();
+    for (const n of [...stationsEl.children]) if (n instanceof HTMLElement && n.dataset.id != null) have.set(n.dataset.id, n);
     for (const [id, n] of have) if (!vis.some((d) => d.id === id)) n.remove();
     vis.forEach((d, i) => {
       let n = have.get(d.id);
       if (!n) {
         n = el('button.station', { data: { target: `station:${d.id}`, id: d.id }, 'aria-label': d.label, 'data-tip': d.key ? `${d.label} (${d.key.toUpperCase()})` : d.label },
           el('span', { html: icon(d.icon) }), el('span', { text: d.label }));
-        n.addEventListener('click', () => {
+        const btn = n;
+        btn.addEventListener('click', () => {
           const def = REG.stations.find((x) => x.id === d.id);
-          if (n.classList.contains('on')) api.closeSheet(); else def?.onTap(api);
+          if (btn.classList.contains('on')) api.closeSheet(); else def?.onTap(api);
         });
         if (sig.stReady) n.classList.add('new');
       }
@@ -92,7 +96,7 @@ export function createDock(api: Api) {
       const b = d.badge?.(s), bn = n.querySelector('.badge');
       if (b == null && bn) bn.remove();
       else if (b != null && !bn) n.append(el('span.badge', { text: b }));
-      else if (b != null && bn.textContent !== String(b)) bn.textContent = b;
+      else if (b != null && bn && bn.textContent !== String(b)) bn.textContent = String(b);
       if (stationsEl.children[i] !== n) stationsEl.insertBefore(n, stationsEl.children[i] || null);
     });
     sig.stReady = true;
@@ -101,8 +105,8 @@ export function createDock(api: Api) {
   return {
     sync(s: State) { syncSpeed(s); syncFab(s); syncStations(s); },
     setNudge(on: boolean) { nudge = on; },
-    triggerFab(id: any) { if (fabDef && (!id || fabDef.id === id)) { fab.classList.remove('squash'); void fab.offsetWidth; fab.classList.add('squash'); fabDef.onTap(api); return true; } return false; },
-    stationByKey(k: string|undefined) { return REG.stations.find((d) => d.key === k); },
+    triggerFab(id?: string) { if (fabDef && (!id || fabDef.id === id)) { fab.classList.remove('squash'); void fab.offsetWidth; fab.classList.add('squash'); fabDef.onTap(api); return true; } return false; },
+    stationByKey(k?: string) { return REG.stations.find((d) => d.key === k); },
     reset() { for (const k in sig) delete sig[k]; stationsEl.innerHTML = ''; },
   };
 }

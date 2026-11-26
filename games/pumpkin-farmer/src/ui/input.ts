@@ -2,21 +2,19 @@
 // R.on('tap', (hit, event)); every tap gets a ripple, a blip and a haptic tick within a frame, then the handler
 // registered for the hit's kind runs. Toys (lighthouse, boat, scarecrow, Weighmaster, Biscuit, hives) live here.
 import { REG, registerTap } from './registry.js';
-import { $, el, icon } from './dom.js';
+import { el, icon, need } from './dom.js';
 import { LINES } from '../sim/story.js';
 import { T } from '../sim/tuning.js';
-import type { Api } from './types.js';
-import { OutEvent } from '../sim/out-event.js';
-import { ActionResult } from '../sim/types.js';
-import { Hit } from '../render/types.js';
-import { State } from '../sim/state.js';
+import type { Api, StationDef } from './types.js';
+import type { Hit } from '../render/types.js';
+import type { State } from '../sim/types.js';
 
-export function createInput(api: Api, dock: { sync?: (s: State) => void; setNudge?: (on: boolean) => void; triggerFab: any; stationByKey: any; reset?: () => void; }) {
+export function createInput(api: Api, dock: { sync?: (s: State) => void; setNudge?: (on: boolean) => void; triggerFab(id?: string): unknown; stationByKey(k: string): StationDef | undefined; reset?: () => void; }) {
   const R = api.R;
   // ripple + squash of the tapped thing (toys play their own animation in the renderer)
   const feedback = (hit: Hit) => {
     api.markTouched();
-    if (hit?.x != null) R.fx?.({ type: 'tap', x: hit.x, z: hit.z, kind: hit.kind, id: hit.id });
+    if (hit?.x != null) R.fx({ type: 'tap', x: hit.x, z: hit.z, kind: hit.kind, id: hit.id });
     api.sound('tick'); api.haptic(8);
   };
   R.on?.('tap', (hit, e) => {
@@ -26,8 +24,8 @@ export function createInput(api: Api, dock: { sync?: (s: State) => void; setNudg
     REG.taps.get(hit.kind)?.(hit, api, e);
   });
   // double-tap frames the zone (design §12 preset zooms)
-  const FRAME = { giant: 'giant', row: 'patch', stand: 'stand', barn: 'barn', lot: 'lot', scale: 'scale', hives: 'hives' };
-  R.on?.('doubletap', (hit) => { if (FRAME[hit?.kind] && !api.settings.reduceMotion) R.cam?.frame?.(FRAME[hit.kind]); });
+  const FRAME: Record<string, string> = { giant: 'giant', row: 'patch', stand: 'stand', barn: 'barn', lot: 'lot', scale: 'scale', hives: 'hives' };
+  R.on?.('doubletap', (hit) => { const kind = hit && FRAME[hit.kind]; if (kind && !api.settings.reduceMotion) R.cam.frame?.(kind); });
   R.on?.('longpress', (hit, e) => {
     feedback(hit);
     if (!hit || !api.s()) return;
@@ -37,7 +35,7 @@ export function createInput(api: Api, dock: { sync?: (s: State) => void; setNudg
   // Stroll (first person, design §1 camera): the prototype's thumb joystick on touch, and a way back up.
   const knob = el('i'), joy = el('div.joy', { 'aria-label': 'Walk joystick' }, knob);
   const fly = el('button.btn.flyup', { onclick: () => R.cam?.stroll?.(false), html: `${icon('home')}<span>Fly up</span>` });
-  $('#game-ui').append(joy, fly);
+  need('#game-ui').append(joy, fly);
   let jid: number|null = null;
   const setJoy = (e: PointerEvent) => {
     const r = joy.getBoundingClientRect(), max = r.width * 0.36;
@@ -48,20 +46,20 @@ export function createInput(api: Api, dock: { sync?: (s: State) => void; setNudg
   };
   joy.addEventListener('pointerdown', (e) => { jid = e.pointerId; joy.setPointerCapture(jid); setJoy(e); e.preventDefault(); });
   joy.addEventListener('pointermove', (e) => { if (e.pointerId === jid) setJoy(e); });
-  const endJoy = (e: { pointerId: any; }) => { if (e.pointerId !== jid) return; jid = null; knob.style.transform = ''; R.cam?.setJoy?.(0, 0); };
+  const endJoy = (e: PointerEvent) => { if (e.pointerId !== jid) return; jid = null; knob.style.transform = ''; R.cam?.setJoy?.(0, 0); };
   joy.addEventListener('pointerup', endJoy); joy.addEventListener('pointercancel', endJoy);
   R.onView?.((view) => { document.body.classList.toggle('stroll', view === 'stroll'); api.closeSheet(); });
 
   // Desktop extras (§12): Space pause, 1/2/4 speed, S skip, R ring up, W water, G/P/B/L/T stations, A almanac,
   // H home, F stroll, Esc close. Slices can add keys with registerKey.
   addEventListener('keydown', (e) => {
-    if (e.target.closest?.('input, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
+    if ((e.target instanceof Element && e.target.closest('input, textarea')) || e.metaKey || e.ctrlKey || e.altKey) return;
     const s = api.s();
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     if (k === 'Escape') { if (api.closeTop()) e.preventDefault(); else if (R.cam?.view === 'stroll') R.cam.stroll(false); return; }
     if (!s || api.blockedByUi()) return;
-    const go = (fn: { (): void; (): ActionResult&{ events: OutEvent[]; }; (): ActionResult&{ events: OutEvent[]; }; (): ActionResult&{ events: OutEvent[]; }; (): any; (): any; (): void; (): void; (): any; (): any; (): void; }) => { e.preventDefault(); api.markTouched(); fn(); };
-    if (REG.keys.has(k)) return go(() => REG.keys.get(k)(api, e));
+    const go = (fn: () => unknown) => { e.preventDefault(); api.markTouched(); fn(); };
+    if (REG.keys.has(k)) return go(() => REG.keys.get(k)?.(api, e));
     if (k === ' ') return go(() => api.dispatch({ type: 'clock/pause' }));
     if (k === '1' || k === '2' || k === '4') return go(() => api.dispatch({ type: 'clock/speed', speed: +k }));
     if (k === 's') return go(() => api.dispatch({ type: 'clock/skip' }));

@@ -1,21 +1,28 @@
 // World pins (design §12): 48px DOM markers positioned every frame from projected 3D points (R.project), at most
 // 12. A pin whose point is off screen (or under the HUD or tray) becomes an edge arrow at the nearest screen edge,
 // pointing at it, so the player always knows where to look.
-import { $, el, icon } from './dom.js';
+import { $, el, icon, need } from './dom.js';
 import { REG } from './registry.js';
 import { T } from '../sim/tuning.js';
-import type { Api, PinDef } from './types.js';
-import { State } from '../sim/state.js';
+import type { Api, PinDef, At } from './types.js';
+import type { Projected } from '../render/types.js';
+import type { State } from '../sim/types.js';
+
+/** A pin's spot on screen: its node and its point, edge arrows carry edge. */
+interface PlacedPin { n: HTMLElement; x: number; y: number; edge?: boolean }
+/** The safe rectangle pins live in. */
+interface SafeRect { l: number; r: number; t: number; b: number }
 
 // Pins never overlap as tap targets: a few [?] families in line at the stand fan out side by side over their heads
 // instead of stacking 3-5 deep. A few passes of pairwise pushes, from the same projected points every frame (so the fan
 // is steady, not jittery); the earlier pin of a pair keeps its place where it can.
 const GAP = 52;
-export function spread(ps: string|any[], rect: { l: any; r: any; t: any; b: any; }) {
+export function spread(ps: PlacedPin[], rect: SafeRect) {
   for (let it = 0; it < 6; it++) {
     let moved = false;
     for (let i = 0; i < ps.length; i++) for (let j = i + 1; j < ps.length; j++) {
       const a = ps[i], b = ps[j];
+      if (!a || !b) continue;
       let dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
       if (d >= GAP) continue;
       const edge = a.edge || b.edge;
@@ -35,23 +42,23 @@ export function spread(ps: string|any[], rect: { l: any; r: any; t: any; b: any;
 // as the player pans, and is kept inside the same safe rectangle: the #pins layer sits under the HUD and the tray, so a
 // popup left at its raw projected point could end up behind them where it can't be tapped. The popup is drawn centred
 // above its point (translate(-50%, -100%)), w x h px; returns the clamped point.
-export const anchored = new Map();   // node -> { pos: () => world point { x, y, z }, lift: px the popup sits above it,
+export const anchored = new Map<HTMLElement, { pos: () => At; lift?: number; place?: (pr: Projected, rect: SafeRect, n: HTMLElement) => void }>();   // node -> { pos: () => world point { x, y, z }, lift: px the popup sits above it,
                                      //   place?(pr, rect, node): places the node itself (the bubble flips below its point) }
-export function fitPopup(x: number, y: number, w: number, h: any, rect: { l: any; r: any; t: any; b: any; }) {
+export function fitPopup(x: number, y: number, w: number, h: number, rect: SafeRect) {
   const l = rect.l - 30 + w / 2 + 8, r = rect.r + 30 - w / 2 - 8;
   return { x: l > r ? (rect.l + rect.r) / 2 : Math.max(l, Math.min(r, x)), y: Math.max(rect.t + h, Math.min(rect.b, y)) };
 }
 
 export function createPins(api: Api) {
-  const root = $('#pins');
-  const nodes = new Map();
+  const root = need('#pins');
+  const nodes = new Map<string, HTMLElement>();
 
   function node(def: PinDef) {
     let n = nodes.get(def.id);
     if (!n) {
       // (def.cls: a pin style, e.g. track A's gold ✦ "delight" pin: something happened, have a look)
       n = el('button.pin', { class: def.cls || null, 'aria-label': def.label || def.id, 'data-tip': def.label || null, html: icon(def.icon || 'alert') + '<span class="arrow"></span>' });
-      n.addEventListener('click', (e: { stopPropagation: () => void; }) => { e.stopPropagation(); api.haptic(8); api.sound('tick'); def.onTap(api); });
+      n.addEventListener('click', (e) => { e.stopPropagation(); api.haptic(8); api.sound('tick'); def.onTap(api); });
       root.append(n);
       nodes.set(def.id, n);
     }
@@ -68,18 +75,20 @@ export function createPins(api: Api) {
 
   return {
     sync(s: State) {
-      const live = new Set();
+      const live = new Set<string>();
       if (s && api.R?.project) {
         // edge arrows (44 px, centred on their point) keep inside the same band
         const rect = safeRect(), cx = (rect.l + rect.r) / 2, cy = (rect.t + rect.b) / 2, edgeR = { ...rect, t: rect.t + 26 };
         let count = 0;
-        const placed = [];
+        const placed: PlacedPin[] = [];
         for (const def of REG.pins) {
           if (count >= T.ui.maxPins) break;
           let on = false;
           try { on = def.when(s); } catch { on = false; }
           if (!on) continue;
-          const p = def.pos(s), pr = api.R.project(p.x, p.y ?? 0, p.z);
+          const p = def.pos(s);
+          if (!p) continue;
+          const pr = api.R.project(p.x, p.y ?? 0, p.z);
           if (!pr) continue;
           count++; live.add(def.id);
           const n = node(def);
@@ -96,7 +105,8 @@ export function createPins(api: Api) {
             const ex = cx + dx * Math.min(1, k), ey = cy + dy * Math.min(1, k);
             n.classList.add('edge');
             placed.push({ n, x: ex, y: ey, edge: true });
-            n.querySelector('.arrow').style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+            const arrow = n.querySelector<HTMLElement>('.arrow');
+            if (arrow) arrow.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
           }
         }
         spread(placed, rect);

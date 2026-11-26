@@ -22,7 +22,7 @@ export interface PhotoOpts { crisp?: boolean; focus?: { x: number; y?: number; z
 
 export interface RendererCam {
   glide(x: number, z: number, zoom?: number, ms?: number, az?: number, polar?: number): void;
-  frame(kind: string): unknown;
+  frame(kind: string, ms?: number): unknown;
   home(ms?: number): void;
   setInset(px?: number, top?: number, right?: number): void;
   stroll(on?: boolean): void;

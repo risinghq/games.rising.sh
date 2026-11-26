@@ -7,21 +7,21 @@
 //
 // api.payoff({ title, sub?, stamp? (an icon name), big?, speaker?, line?, glide?: { x, z, zoom }, ms? }) queues one.
 // Also here: clockStrip(text?), the slate strip a planning sheet shows while the clock is stopped.
-import { $, el, icon } from './dom.js';
+import { el, icon, need } from './dom.js';
 import { portraitEl } from './dialog.js';
 import { T } from '../sim/tuning.js';
-import type { Api } from './types.js';
+import type { Api, PayoffOpts } from './types.js';
 
 const B = T.ui.banner;
-export const bannerMs = (o: { ms: any; big: any; line: string|any[]; }) => Math.min(B.maxMs, (o.ms ?? (o.big ? B.bigMs : B.ms)) + (o.line ? o.line.length * B.perChar : 0));
+export const bannerMs = (o: PayoffOpts) => Math.min(B.maxMs, (o.ms ?? (o.big ? B.bigMs : B.ms)) + (o.line ? o.line.length * B.perChar : 0));
 
-export function createBanner(api: Api, { touchedRecently = () => false } = {}) {
+export function createBanner(api: Api, { touchedRecently = () => false }: { touchedRecently?: () => boolean } = {}) {
   const root = el('div', { id: 'banner', 'aria-live': 'polite' });
-  $('#game-ui').append(root);
-  const queue: any[] = [];
-  let cur: { timer: any; node: any; o?: any; }|null = null, fading = false, shieldUntil = 0;
+  need('#game-ui').append(root);
+  const queue: PayoffOpts[] = [];
+  let cur: { timer: ReturnType<typeof setTimeout>; node: HTMLElement; o: PayoffOpts }|null = null, fading = false, shieldUntil = 0;
 
-  function show(o: { big: any; stamp: any; title: any; sub: any; line: any; speaker: any; glide: { x: number; z: number; zoom: number|undefined; }; }) {
+  function show(o: PayoffOpts) {
     const s = api.s();
     const node = el('div.banner', { class: o.big ? 'big' : null, role: 'status' },
       el('div.stamp', { html: icon(o.stamp || 'star') }),
@@ -29,8 +29,8 @@ export function createBanner(api: Api, { touchedRecently = () => false } = {}) {
       o.sub ? el('div.b-sub', { text: o.sub }) : null,
       o.line ? el('div.b-line', {}, o.speaker ? portraitEl(api, o.speaker, s, 'small') : null, el('span', { text: o.line })) : null);
     // a tap is the player's "got it": dismiss, and swallow it (and the next one, while it fades)
-    const swallow = (e: { preventDefault: () => void; stopPropagation: () => void; }) => { e.preventDefault(); e.stopPropagation(); };
-    node.addEventListener('pointerdown', (e: any) => { swallow(e); shieldUntil = performance.now() + B.shieldMs; dismiss(); });
+    const swallow = (e: Event) => { e.preventDefault(); e.stopPropagation(); };
+    node.addEventListener('pointerdown', (e) => { swallow(e); shieldUntil = performance.now() + B.shieldMs; dismiss(); });
     node.addEventListener('click', swallow);
     root.append(node);
     fitTitle(node);
@@ -48,9 +48,9 @@ export function createBanner(api: Api, { touchedRecently = () => false } = {}) {
     node.classList.add('out');                     // (it still catches taps while it fades: see .banner.out)
     setTimeout(() => { node.remove(); fading = false; document.body.classList.remove('banner-on'); next(); }, B.shieldMs);
   }
-  function next() { if (!cur && !fading && queue.length) show(queue.shift()); }
+  function next() { if (!cur && !fading && queue.length) { const o = queue.shift(); if (o) show(o); } }
   return {
-    payoff(o: { title: any; }) {
+    payoff(o: PayoffOpts) {
       if (!o?.title) return false;
       // (a phone fits 16 characters at 28 px: the joke goes in the sub, rulings R12)
       if (String(o.title).length > B.titleMax) console.warn(`banner: "${o.title}" is over ${B.titleMax} characters`);
@@ -70,8 +70,8 @@ export function createBanner(api: Api, { touchedRecently = () => false } = {}) {
 // and "FIRST ORANGE ONE" lose their ends to the ellipsis on a 390 px phone. The title steps down a pixel at a time until it
 // all reads (rulings R12), and keeps the ellipsis only below TITLE_MIN_PX.
 const TITLE_MIN_PX = 20;
-function fitTitle(node: { querySelector: (arg0: string) => any; }) {
-  const t = node.querySelector('.b-title');
+function fitTitle(node: HTMLElement) {
+  const t = node.querySelector<HTMLElement>('.b-title');
   if (!t) return;
   for (let px = parseFloat(getComputedStyle(t).fontSize); t.scrollWidth > t.clientWidth && px > TITLE_MIN_PX;) t.style.fontSize = `${--px}px`;
 }
