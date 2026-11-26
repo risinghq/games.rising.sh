@@ -1,6 +1,6 @@
 // The top of the screen (design §12): HUD (menu, date + year, fog chip, cash), the single Next-up chip and the
 // weekend second row. Everything diffs against what it last drew, so syncing every frame is cheap.
-import { $, el, fmt, icon, bump, weatherIcon } from './dom.js';
+import { el, fmt, icon, bump, need, weatherIcon } from './dom.js';
 import { chip } from '../sim/weather.js';
 import { T } from '../sim/tuning.js';
 import { createNextStop } from './road.js';
@@ -10,7 +10,7 @@ import type { Api } from './types.js';
 const FOG_PHASES = new Set(['grow', 'october', 'weighoff']);
 
 export function createHud(api: Api) {
-  const root = $('#hud'), nextup = $('#nextup'), wkrow = $('#wkrow');
+  const root = need('#hud'), nextup = need('#nextup'), wkrow = need('#wkrow');
   const dateB = el('b'), dateS = el('span');
   const fog = el('button.fogchip', { 'data-target': 'hud:fog', 'aria-label': 'Marlene: fog report and forecast', 'data-tip': 'Fog report (A)', onclick: () => api.openSheet('almanac') });
   const cashV = el('span.v.num');
@@ -20,8 +20,10 @@ export function createHud(api: Api) {
     el('div.hud-date', {}, dateB, dateS), el('div.spacer'), fog, cash,
   );
 
-  const sig = {};
-  let shown: number|null = null, goalNode: string|Node|null = null, goalId: string|null|undefined = null, doneTimer = 0;
+  // what each part last drew, so a frame with no change writes nothing
+  interface Sig { d?: string; sub?: string; fog?: string; cash?: string; hl?: string; hlCount?: number; wk?: string; wkOn?: boolean; fit?: string }
+  let sig: Sig = {};
+  let shown: number|null = null, goalNode: HTMLElement | null = null, goalId: string|null|undefined = null, doneTimer = 0;
   // [D] when there's no goal, the Next-up slot says what's next (road.js): never both
   const stop = createNextStop(api, nextup);
 
@@ -59,9 +61,10 @@ export function createHud(api: Api) {
     goalId = id;
     // the same goal re-aimed (the barn lesson's count grows as cohorts ripen): new words, same chip
     if (g && goalNode && !doneTimer && goalNode.dataset.gid === g.id) {
-      goalNode.querySelector('.text').textContent = g.text;
+      const text = goalNode.querySelector('.text');
+      if (text) text.textContent = g.text;
       goalNode.setAttribute('aria-label', `Next up: ${g.text}`);
-      goalNode.onclick = () => api.followGoal(api.s()?.story.goal);
+      goalNode.onclick = () => api.followGoal(api.s()?.story.goal ?? null);
       return;
     }
     goalNode?.remove(); goalNode = null;
@@ -73,10 +76,9 @@ export function createHud(api: Api) {
   }
   function goalDone() {
     if (!goalNode) return;
-    const n = goalNode;
-    n.querySelector('.tag').innerHTML = `${icon('check', 's')}Done`;
+    const n = goalNode, tag = n.querySelector<HTMLElement>('.tag');
+    if (tag) { tag.innerHTML = `${icon('check', 's')}Done`; tag.style.background = 'var(--good)'; }
     n.classList.add('ok');
-    n.querySelector('.tag').style.background = 'var(--good)';
     doneTimer = setTimeout(() => { n.classList.add('done'); setTimeout(() => { n.remove(); if (goalNode === n) goalNode = null; doneTimer = 0; goalId = undefined; }, 320); }, 900);
   }
   // The moment passed (story.js goalLapse): the chip just bows out, no "Done"; a townsperson says why.
@@ -133,9 +135,9 @@ export function createHud(api: Api) {
   }
   return {
     sync(s: State, rdt: number) { syncDate(s); syncFog(s); syncCash(s, rdt); syncGoal(s); stop.sync(s, !!goalNode); syncHighlight(s); syncWeekend(s); fit(); },
-    onCash(delta: number|undefined) { bump(cash, delta >= 0 ? 'up' : 'down'); },
+    onCash(delta: number) { bump(cash, delta >= 0 ? 'up' : 'down'); },
     goalDone,
     goalLapse,
-    reset() { shown = null; goalId = null; goalNode?.remove(); goalNode = null; for (const k in sig) delete sig[k]; },
+    reset() { shown = null; goalId = null; goalNode?.remove(); goalNode = null; sig = {}; },
   };
 }

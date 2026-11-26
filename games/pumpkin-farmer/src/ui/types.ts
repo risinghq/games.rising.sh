@@ -3,7 +3,7 @@
 import type { Action, ActionResult, Card, OutEvent, State } from '../sim/types.js';
 import type { StoryGoal } from '../sim/state.js';
 import type { Game } from '../sim/game.js';
-import type { Renderer, Hit } from '../render/types.js';
+import type { Renderer, Hit, Projected } from '../render/types.js';
 import type { DEFAULT_SETTINGS } from './app.js';
 
 export type Settings = typeof DEFAULT_SETTINGS;
@@ -115,15 +115,62 @@ export interface ScreenDef {
 export type KeyHandler = (api: Api, e: KeyboardEvent) => void;
 export type PlanningWhen = (s: State, arg: unknown) => boolean;
 export interface EventStyle { cls?: string; ic?: string }
+/** The camera frame a close-up glides to: centre on (x, z), `fit` world units across, at azimuth/polar when set. */
+export interface HandsFrame { x: number; z: number; fit: number; az?: number; polar?: number }
+/** K, the kit a close-up verb plays against. hands.ts builds it; the verb's start/down/update take it. */
+export interface HandsKit {
+  api: Api;
+  R: Renderer;
+  arg: unknown;
+  /** the ring's seconds (0: no countdown) */
+  timer: number;
+  /** seconds left on the ring */
+  left(): number;
+  /** end the verb: its finish() action goes to the sim, then ended() shows */
+  end(reason: string): void;
+  /** a line in the hint strip, with a speaker's face when named */
+  hint(text: string, speaker?: string): void;
+  /** the count on the strip ('' clears it) */
+  count(text: string): void;
+  /** the one combo badge over the last touch ('' clears it) */
+  combo(text: string, at?: { x: number; y: number }): void;
+  /** the ending's word, centred */
+  big(text: string, cls?: string): void;
+  /** container-relative CSS px of a world point */
+  project(x: number, y: number, z: number): Projected;
+  /** the ground point under a screen point, or null */
+  ground(px: number, py: number): { x: number; z: number } | null;
+  juice: {
+    ripple(x: number, z: number, color: number): void;
+    pop(x: number, y: number, z: number, color: number, n: number, sparkles?: number): void;
+    sparkle(x: number, y: number, z: number, n: number): void;
+    float(text: string, x: number, y: number, z: number, cls: string): void;
+    /** a pitch-stepped blip: a semitone a step */
+    blip(name: string, step?: number): void;
+    buzz(ms: number): void;
+  };
+}
+/** A hands-on close-up verb; registers with registerHands, opens with openHands (hands.ts). */
 export interface HandsDef {
   id: string;
-  frame(s: State): unknown;
-  hint(s: State): string;
-  timer?: number;
-  start(api: Api, arg: unknown): void;
-  down(e: PointerEvent): void;
-  move(e: PointerEvent): void;
-  up(e: PointerEvent): void;
-  update(dt: number): void;
-  finish(): Action | null;
+  /** the hint strip's face while the verb talks */
+  speaker?: string;
+  /** where the camera sits for the verb (s is null before the game starts) */
+  frame(s: State | null, arg: unknown): HandsFrame;
+  /** the strip's opening line */
+  hint(s: State | null, arg: unknown): string;
+  /** the ring's seconds; unset or 0: no countdown */
+  timer?(api: Api): number;
+  start(K: HandsKit, arg: unknown): void;
+  /** a touch at CSS px { x, y } */
+  down(pt: { x: number; y: number }, K: HandsKit): void;
+  /** pointer drag/release while the verb runs; hands.ts does not forward these yet */
+  move?(e: PointerEvent): void;
+  up?(e: PointerEvent): void;
+  update(dt: number, K: HandsKit): void;
+  /** the verb's one action, dispatched when it ends */
+  finish(K: HandsKit): Action;
+  /** after the action: res is its result, reason is 'done' | 'timer' | the verb's own */
+  ended?(res: ActionResult, K: HandsKit, reason: string): void;
+  close?(K: HandsKit): void;
 }

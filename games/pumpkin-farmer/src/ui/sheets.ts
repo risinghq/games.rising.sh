@@ -1,26 +1,29 @@
 // Bottom sheets (design §12): one open at a time, at most 46% of the height on phones, a right-hand panel on
 // desktop. Swipe down on the grab bar or header to close. While open, the camera inset keeps the sheet's subject
 // above it, and on weekend days the app runs the clock in 0.5x bullet-time.
-import { State } from '../sim/state.js';
-import { $, el, icon } from './dom.js';
+import type { State } from '../sim/state.js';
+import { $, el, icon, need } from './dom.js';
 import { REG } from './registry.js';
-import type { Api } from './types.js';
+import type { Api, SheetDef } from './types.js';
+
+/** The open sheet: its registry entry, its arg and the nodes build() drew under. */
+interface Cur { id: string; arg: unknown; def: SheetDef; body: HTMLElement; titleEl: HTMLElement; eyebrowEl: HTMLElement; pulsed: Element | null; frames: number }
 
 export function createSheets(api: Api) {
-  const root = $('#sheet');
-  let cur: { id: any; arg: any; def?: any; titleEl?: any; eyebrowEl?: any; body?: any; pulsed?: any; frames?: any; }|null = null;   // { id, arg, def, body, titleEl, eyebrowEl }
+  const root = need('#sheet');
+  let cur: Cur | null = null;
 
   // Tell the camera how much of the screen the UI covers (bottom: tray + open sheet; top: the HUD; right: the
   // desktop sheet panel), so the subject is framed in the clear area between them. The title screen and the
   // new-farm flow frame the camera themselves, so sheets opened there (Settings) leave it alone.
   function inset() {
-    const ui = !$('#game-ui').hidden, desktop = innerWidth >= 900;
+    const ui = !need('#game-ui').hidden, desktop = innerWidth >= 900;
     const h = cur && !desktop ? root.getBoundingClientRect().height + 6 : 0;
     document.body.style.setProperty('--sheet-h', `${h}px`);
     if (!ui) return;
     // the top inset is the HUD, plus the Route 46 row on weekends (the Home view framed the lighthouse under it)
-    const tray = $('#tray').getBoundingClientRect(), wk = $('#wkrow .wk');
-    const top = Math.max($('#hud').getBoundingClientRect().bottom, wk ? wk.getBoundingClientRect().bottom : 0);
+    const tray = need('#tray').getBoundingClientRect(), wk = $('#wkrow .wk');
+    const top = Math.max(need('#hud').getBoundingClientRect().bottom, wk ? wk.getBoundingClientRect().bottom : 0);
     const right = cur && desktop ? innerWidth - root.offsetLeft : 0;   // offsetLeft ignores the slide-in transform
     api.R?.cam?.setInset?.(innerHeight - tray.top + h, top, right);
   }
@@ -30,6 +33,7 @@ export function createSheets(api: Api) {
     if (!def) { api.toast('Coming soon', ''); return false; }
     const s = api.s();
     if (cur?.id === id && cur.arg === arg) return true;
+    if (!s) return false;
     if (cur) teardown(false);
     root.innerHTML = '';
     const eyebrowEl = el('div.eyebrow'), titleEl = el('h2');
@@ -37,20 +41,21 @@ export function createSheets(api: Api) {
       el('button.iconbtn.round', { html: icon('close'), 'aria-label': 'Close (Esc)', 'data-tip': 'Close (Esc)', onclick: () => close() }));
     const body = el('div.sheet-body');
     root.append(el('div.sheet-grab', { 'aria-hidden': 'true' }), head, body);
-    cur = { id, arg, def, body, titleEl, eyebrowEl };
+    cur = { id, arg, def, body, titleEl, eyebrowEl, pulsed: null, frames: 0 };
     retitle(s);
     def.build(body, s, arg, api);
     root.classList.add('open');
-    root.setAttribute('aria-label', titleEl.textContent);
+    root.setAttribute('aria-label', titleEl.textContent ?? '');
     document.body.classList.add('sheet-open');
     api.sound('open');
     requestAnimationFrame(inset);
     return true;
   }
-  function retitle(s: State|null) {
+  function retitle(s: State) {
+    if (!cur) return;
     const t = cur.def.title ? cur.def.title(s, cur.arg) : '', e = cur.def.eyebrow ? cur.def.eyebrow(s, cur.arg) : '';
     if (cur.titleEl.textContent !== t) cur.titleEl.textContent = t;
-    if (cur.eyebrowEl.textContent !== e) cur.eyebrowEl.textContent = e;
+    if (cur.eyebrowEl.textContent !== e) cur.eyebrowEl.textContent = e ?? null;
     cur.eyebrowEl.hidden = !e;
   }
   function teardown(animate = true) {
@@ -67,6 +72,7 @@ export function createSheets(api: Api) {
   // into view when it starts pulsing, and a soft fade at the bottom says there is more below (the Giant sheet's Feed,
   // Shade and Tape sit under the water controls on a phone).
   function reveal() {
+    if (!cur) return;
     const b = cur.body, p = b.querySelector('.pulse');
     if (p && p !== cur.pulsed) {
       cur.pulsed = p;
@@ -77,9 +83,9 @@ export function createSheets(api: Api) {
   }
 
   // Swipe down to close (grab bar and header), with a little rubber band.
-  let drag: { id: any; dy: any; y: any; t: any; }|null = null;
+  let drag: { id: number; dy: number; y: number; t: number } | null = null;
   root.addEventListener('pointerdown', (e) => {
-    if (!cur || !e.target.closest('.sheet-grab, .sheet-head') || e.target.closest('button')) return;
+    if (!cur || !(e.target instanceof Element) || !e.target.closest('.sheet-grab, .sheet-head') || e.target.closest('button')) return;
     drag = { y: e.clientY, t: performance.now(), id: e.pointerId, dy: 0 };
     root.setPointerCapture(e.pointerId);
     root.classList.add('dragging');
@@ -89,7 +95,7 @@ export function createSheets(api: Api) {
     drag.dy = e.clientY - drag.y;
     root.style.transform = `translateY(${drag.dy > 0 ? drag.dy : drag.dy * 0.2}px)`;
   });
-  const end = (e: { pointerId: any; }) => {
+  const end = (e: PointerEvent) => {
     if (!drag || e.pointerId !== drag.id) return;
     const v = drag.dy / Math.max(1, performance.now() - drag.t);
     root.classList.remove('dragging');
@@ -105,7 +111,7 @@ export function createSheets(api: Api) {
     open, close,
     get id() { return cur?.id || null; },
     get arg() { return cur?.arg; },
-    sync(s: any) {
+    sync(s: State) {
       if (!cur) return;
       retitle(s); cur.def.update?.(cur.body, s, cur.arg, api);
       if ((cur.frames = (cur.frames || 0) + 1) % 6 === 1) reveal();
