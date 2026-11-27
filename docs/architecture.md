@@ -54,7 +54,7 @@ breaks the thresholds:
 ## Imported games
 
 Battle Drones, Tree Appreciator, Emberwick and Pumpkin Farmer are by Simon
-Willison. Their upstream code stays as it was, so a change to it is a diff
-against the import. [NOTICE](../NOTICE) records each source and what this
-repository changed. Each game's README describes how its build wraps the
-upstream files.
+Willison. An import starts as the upstream code, and every later change is a
+diff against that import. [NOTICE](../NOTICE) records each source and what this
+repository changed. Each game's README describes how its build wraps or converts
+the upstream files.

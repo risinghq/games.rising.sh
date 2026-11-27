@@ -1,13 +1,13 @@
 // ============================================================================
 //  Boot & main loop
 // ============================================================================
-const FPS = { ms: 16, acc: 0, n: 0, win: 0, cool: 3 };
-const MAX_DPR = Math.min(window.devicePixelRatio || 1, IS_TOUCH ? 1.75 : 2);
-let READY = false;
-const nextFrame = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+const FPS: any = { ms: 16, acc: 0, n: 0, win: 0, cool: 3 };
+const MAX_DPR: any = Math.min(window.devicePixelRatio || 1, IS_TOUCH ? 1.75 : 2);
+let READY: any = false;
+const nextFrame: any = () => new Promise((r: any) => requestAnimationFrame(() => setTimeout(r, 0)));
 
-function resize() {
-  const w = innerWidth, h = innerHeight;
+function resize() : any {
+  const w: any = innerWidth, h: any = innerHeight;
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.fov = w / h < 0.8 ? 46 : 36;
@@ -15,10 +15,10 @@ function resize() {
   PUni.uScale.value = renderer.domElement.height / (2 * Math.tan(camera.fov * DEG / 2));
 }
 
-const BOOT_T0 = performance.now();
-const btime = (label) => console.debug(`[boot] ${label} ${((performance.now() - BOOT_T0) / 1000).toFixed(2)}s`);
-async function boot() {
-  const stage = $('stage');
+const BOOT_T0: any = performance.now();
+const btime: any = (label: any) => console.debug(`[boot] ${label} ${((performance.now() - BOOT_T0) / 1000).toFixed(2)}s`);
+async function boot(): Promise<any> {
+  const stage: any = $('stage');
   stage.appendChild(renderer.domElement);
   renderer.domElement.tabIndex = 0;
   renderer.setPixelRatio(Math.min(MAX_DPR, IS_TOUCH ? 1.5 : 1.75));
@@ -65,25 +65,25 @@ async function boot() {
   initFires(); initMagic(); setupStory(); initMagicWorld(); btime('story');
   initParticles(); initGlows();
   UI.status('building your own places'); await nextFrame();
-  try { AREAS.boot(); } catch (e) { console.error('custom areas', e); }
+  try { AREAS.boot(); } catch (e: any) { console.error('custom areas', e); }
   btime('areas');
   teleportParty(-3.6, -14.4, 0); btime('initFx');
   bindInput(renderer.domElement);
   UI.buildPortraits(); btime('UI.buildPortraits');
   UI.buildMap(); btime('UI.buildMap');
   UI.status('compiling shaders'); await nextFrame();
-  try { await renderer.compileAsync(scene, camera); } catch (e) { renderer.compile(scene, camera); }
+  try { await renderer.compileAsync(scene, camera); } catch (e: any) { renderer.compile(scene, camera); }
   READY = true;
   UI.ready();
 }
 
-let last = performance.now();
-function frame(now) {
+let last: any = performance.now();
+function frame(now: any) : any {
   requestAnimationFrame(frame);
   if (window.__hold) { last = now; return; }
-  const dt = Math.min(0.05, Math.max(0.0005, (now - last) / 1000));
+  const dt: any = Math.min(0.05, Math.max(0.0005, (now - last) / 1000));
   last = now;
-  const t = (SU.uTime.value += dt);
+  const t: any = (SU.uTime.value += dt);
   SU.uWind.value = 0.75 + 0.35 * Math.sin(t * 0.21) + 0.2 * Math.sin(t * 0.53 + 1.3);
   applyTime(dt);
   if (READY) step(dt, t);
@@ -95,13 +95,13 @@ function frame(now) {
   FPS.win += dt; FPS.cool -= dt;
   if (READY && FPS.win > 2 && FPS.cool < 0) {
     FPS.win = 0;
-    const pr = renderer.getPixelRatio();
+    const pr: any = renderer.getPixelRatio();
     if (FPS.ms > 26 && pr > 1) { renderer.setPixelRatio(Math.max(1, pr - 0.25)); resize(); FPS.cool = 3; }
     else if (FPS.ms < 13 && pr < MAX_DPR) { renderer.setPixelRatio(Math.min(MAX_DPR, pr + 0.25)); resize(); FPS.cool = 5; }
   }
 }
-const _focus0 = new V3(0, 0, 0);
-function step(dt, t) {
+const _focus0: any = new V3(0, 0, 0);
+function step(dt: any, t: any) : any {
   if (UI.paused) { updateCamera(dt); UI.update(dt, t); return; }
   updateWaits(dt);
   if (!EDIT.on) updateClock(dt);
@@ -134,18 +134,18 @@ function step(dt, t) {
 window.__ew = { THREE, pool, GRASS, HC, REG, WORLD, SITES, KFIRES, LAMPS, THORNS, STONESETS, IVEG, V, CUT, CAM, TIME, INPUT, teleportParty, fixPartyY, player: () => player, PARTY, CHARS, UI, renderer, scene, camera, fadeGroups, emitters, PHYS, UG, UGP, UGR, UGM, SU, MOUTH, terrainH, groundAt, ANIMALS,
   G: () => G, q, qSet, flag, setFlag, DLG, SCENE, COMBAT, MAGIC, STORY, STATE, FINALE, DARK, QUESTS, TALK, SPOTS, INTERACT, HATS, WISPS, BREAKABLES, REVEALS, CLOCK,
   fireById, setFireLit, cast, learn, giveSpark, giveHat, kindleFire, drawFlame, sceneField, askField, endGame, applyNPCState, placeFieldCrowd, FIELD, startTalk, interact, dlgAdvance, pickChoice, startGame, fastTravel, spawnEnemy, spawnBoss, killEnemy, hurtEnemy, N, AUDIO,
-  walkTo: (x, z) => { INPUT.target = new V3(x, player.y, z); INPUT.goal = null; },
-  sim: (sec, fn) => { const dt = 1 / 30; for (let i = 0; i < sec * 30; i++) { const t = (SU.uTime.value += dt); applyTime(dt); step(dt, t); if (fn && fn()) break; } return { x: +player.x.toFixed(2), y: +player.y.toFixed(2), z: +player.z.toFixed(2), b: CUT.b && CUT.b.id, f: CUT.f, ug: UG.zone, m: q('main'), scene: SCENE.name, dlg: DLG.active }; },
+  walkTo: (x: any, z: any) => { INPUT.target = new V3(x, player.y, z); INPUT.goal = null; },
+  sim: (sec: any, fn: any) => { const dt: any = 1 / 30; for (let i: any = 0; i < sec * 30; i++) { const t: any = (SU.uTime.value += dt); applyTime(dt); step(dt, t); if (fn && fn()) break; } return { x: +player.x.toFixed(2), y: +player.y.toFixed(2), z: +player.z.toFixed(2), b: CUT.b && CUT.b.id, f: CUT.f, ug: UG.zone, m: q('main'), scene: SCENE.name, dlg: DLG.active }; },
   KEYS, pipTest: pip, ugRegionAt, ugZoneAt, inCarve, AREAS, AK, EDIT, aparse, aserialize, AREA_EXAMPLE, areaTemplate, editOpen, editClose, edGround, edPick, edScreen, edSetTool, edPlaceAt, edAreaAt, edUndo, raiseStones, WATER_Y, castWisp, BASEVEG, PADS, PATHS, BUILDINGS, DOORS, SMOKES, FIRES, ANIMS, terrainRefresh, refreshGrass,
   // async run for the tests: steps the game, letting scenes and conversations move on between frames
-  run: async (sec, o = {}) => {
+  run: async (sec: any, o: any = {}) => {
     window.__hold = true; DLG.auto = !!o.auto; if (o.choices) DLG.autoQ = o.choices.slice();
-    const dt = 1 / 30; let i = 0;
+    const dt: any = 1 / 30; let i: any = 0;
     try {
       for (; i < sec * 30; i++) {
-        const t = (SU.uTime.value += dt); applyTime(dt); step(dt, t);
-        for (let k = 0; k < 4; k++) await null;
-        if (i % 45 === 44) await new Promise(r => setTimeout(r, 0));
+        const t: any = (SU.uTime.value += dt); applyTime(dt); step(dt, t);
+        for (let k: any = 0; k < 4; k++) await null;
+        if (i % 45 === 44) await new Promise((r: any) => setTimeout(r, 0));
         if (o.until && o.until()) break;
       }
     } finally { window.__hold = false; DLG.auto = false; }
@@ -156,4 +156,4 @@ window.__ew = { THREE, pool, GRASS, HC, REG, WORLD, SITES, KFIRES, LAMPS, THORNS
 addEventListener('visibilitychange', () => { if (document.hidden && G.started && !SCENE.active) saveGame(true); });
 addEventListener('pagehide', () => { if (G.started && !SCENE.active) saveGame(true); });
 requestAnimationFrame(frame);
-boot().catch(err => { console.error(err); UI.status('Something went wrong while building the valley: ' + err.message); });
+boot().catch((err: any) => { console.error(err); UI.status('Something went wrong while building the valley: ' + err.message); });

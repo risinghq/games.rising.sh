@@ -15,7 +15,12 @@ name order. They share one scope, so they cannot be imported one by one.
 The plugin in `vite.config.ts` serves `/game.js` as `src/` joined the way
 upstream joins it, with `// ---- NAME ----` headers. It also points upstream's
 `'__THREE__'` placeholder at the `three` package, pinned to upstream's 0.170.0.
-The page loads its fonts from Google Fonts.
+
+The source is TypeScript checked with `strict`. Because the files share one
+scope only after concatenation, `tools/typecheck.ts` writes the same joined
+module to `.typecheck/game.ts` and `tsc` checks that compilation unit. The first
+conversion pass uses broad `any` annotations at the migration seams; tighten
+them when a file changes. The page loads its fonts from Google Fonts.
 
 `<meta charset="utf-8">` was added to the page: GitHub Pages names the charset
 in its response header, Cloudflare does not, and without it the browser garbles
