@@ -53,12 +53,13 @@ This repository includes Emberwick, a browser adventure game.
 
 The repository owner imported Emberwick without a license and accepts that
 risk. It will be removed if the author objects. games/emberwick/src/ holds the
-upstream source files unchanged. games/emberwick/index.html is the published
-page with its module script replaced by a script tag, and vite.config.ts joins
-src/ into that script. The changes to the upstream page are that script tag and
-a <meta charset="utf-8"> line. The build bundles three.js 0.170.0 from npm
-instead of loading it from jsDelivr. The game loads its fonts from Google Fonts
-at run time.
+upstream source files renamed to TypeScript and annotated for a strict type
+check, with no intended behavior change. games/emberwick/index.html is the
+published page with its module script replaced by a script tag, and
+vite.config.ts joins src/ into that script. The changes to the upstream page
+are that script tag and a <meta charset="utf-8"> line. The build bundles
+three.js 0.170.0 from npm instead of loading it from jsDelivr. The game loads
+its fonts from Google Fonts at run time.
 
 This repository includes Pumpkin Farmer, a browser farming game.
 
