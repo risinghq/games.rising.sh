@@ -365,7 +365,7 @@ function edSetTool(t: any) : any {
   edGhostClear();
   EDIT.tool = t ? { ...t, pts: [], rot: t.rot || 0 } : null;
   if (t && AK[t.kind]) { EDIT.tool.multi = AK[t.kind].multi; edRollLooks(EDIT.tool); }
-  for (const b of qsaAll('.ed-item')) b.setAttribute('aria-pressed', !!t && b.dataset.kind === t.kind);
+  for (const b of qsaAll('.ed-item')) b.setAttribute('aria-pressed', String(!!t && b.dataset.kind === t.kind));
   renderer.domElement.style.cursor = t ? 'copy' : '';
   if (EDIT.ui) edRenderInspector();
   edHint(); edRebuildOv();
@@ -733,7 +733,7 @@ function edInit() : any {
   ui.areaSel.addEventListener('change', () => { const v: any = ui.areaSel.value; if (v === '+new') { ui.areaSel.value = EDIT.area?.id || ''; edNewArea(); } else if (v === '+example') { ui.areaSel.value = EDIT.area?.id || ''; edNewArea('example'); } else edSetArea(AREAS.byId(v)); ui.areaSel.blur(); });
   $('edUndo').addEventListener('click', () => edUndo(-1)); $('edRedo').addEventListener('click', () => edUndo(1));
   $('edSnap').addEventListener('change', (e: any) => { EDIT.snap = +e.target.value; e.target.blur(); });
-  for (const b of qsaAll('[data-edtime]')) b.addEventListener('click', () => { TIME.h = +b.dataset.edtime; edBarState(); b.blur(); });
+  for (const b of qsaAll('[data-edtime]')) b.addEventListener('click', () => { TIME.h = Number(b.dataset.edtime); edBarState(); b.blur(); });
   $('edView').addEventListener('click', (e: any) => { edToggleView(); e.currentTarget.blur(); });
   $('edExport').addEventListener('click', () => edExport()); $('edImport').addEventListener('click', () => edImport()); $('edHelp').addEventListener('click', () => edHelp());
   $('edWalk').addEventListener('click', () => editClose({ walkHere: true })); $('edDone').addEventListener('click', () => editClose());
@@ -787,7 +787,7 @@ function edAreaSelect() : any {
 function edBarState() : any {
   const a: any = EDIT.area, H: any = a && edHist(a);
   $('edUndo').disabled = !H || H.i <= 0; $('edRedo').disabled = !H || H.i >= H.stack.length - 1;
-  for (const b of qsaAll('[data-edtime]')) b.setAttribute('aria-pressed', Math.abs(TIME.h - +b.dataset.edtime) < 0.3);
+  for (const b of qsaAll('[data-edtime]')) b.setAttribute('aria-pressed', String(Math.abs(TIME.h - Number(b.dataset.edtime)) < 0.3));
   $('edView').setAttribute('aria-pressed', EDIT.view === 'top');
   $('edWalk').hidden = !G.started;
   $('edDone').textContent = EDIT.fromTitle ? 'Back to title' : 'Done';
