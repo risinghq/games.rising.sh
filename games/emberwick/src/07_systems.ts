@@ -202,9 +202,9 @@ function applyTime(dt: any) : any {
   sun.color.copy(lerpKey('sun', h));
   sun.intensity = lerpKey('si', h);
   hemi.color.copy(lerpKey('sky', h)); hemi.groundColor.copy(lerpKey('gnd', h)); hemi.intensity = lerpKey('hi', h);
-  scene.fog.color.copy(lerpKey('fog', h));
-  renderer.setClearColor(scene.fog.color);
-  skyU.uTop.value.copy(lerpKey('top', h)); skyU.uHor.value.copy(lerpKey('hor', h)); skyU.uBot.value.copy(scene.fog.color);
+  SCENE_FOG.color.copy(lerpKey('fog', h));
+  renderer.setClearColor(SCENE_FOG.color);
+  skyU.uTop.value.copy(lerpKey('top', h)); skyU.uHor.value.copy(lerpKey('hor', h)); skyU.uBot.value.copy(SCENE_FOG.color);
   const sth: any = (h - 5.6) / 13.3 * PI;
   skyU.uSunDir.value.set(Math.cos(sth), Math.sin(sth) * 0.95, Math.sin(sth) * 0.5 + 0.2).normalize();
   skyU.uSunCol.value.copy(sun.color);
@@ -218,13 +218,13 @@ function applyTime(dt: any) : any {
   // arrives with the slice; coming back up the sky fades in as the world rebuilds
   const k: any = UG.k, kb: any = UG.dir > 0 ? 1 : k;
   const fx: any = EDIT.on ? Math.max(0, EDIT.cam.dist - 25) * 1.3 : 0;   // the editor's camera can stand far back: push the haze back with it
-  scene.fog.near = lerp(55, UGL.near, k) + fx; scene.fog.far = lerp(150, UGL.far, k) + fx;
+  SCENE_FOG.near = lerp(55, UGL.near, k) + fx; SCENE_FOG.far = lerp(150, UGL.far, k) + fx;
   if (kb > 0.001) {
     sun.intensity *= 1 - k;
     hemi.color.lerp(UGL.sky, k); hemi.groundColor.lerp(UGL.gnd, k); hemi.intensity = lerp(hemi.intensity, UGL.hi, k);
-    scene.fog.color.lerp(UGL.fog, kb);
-    renderer.setClearColor(scene.fog.color);
-    skyU.uTop.value.lerp(UGL.fog, kb); skyU.uHor.value.lerp(UGL.fog, kb); skyU.uBot.value.copy(scene.fog.color);
+    SCENE_FOG.color.lerp(UGL.fog, kb);
+    renderer.setClearColor(SCENE_FOG.color);
+    skyU.uTop.value.lerp(UGL.fog, kb); skyU.uHor.value.lerp(UGL.fog, kb); skyU.uBot.value.copy(SCENE_FOG.color);
     renderer.toneMappingExposure = lerp(renderer.toneMappingExposure, UGL.ex, k);
   }
 }
@@ -294,7 +294,7 @@ function updateCutaway(dt: any) : any {
 const SURF: any = [];   // every surface mesh, hidden once the party is fully underground
 function collectSurface() : any {
   SURF.length = 0;
-  for (const o of scene.children) if ((o.isMesh || o.isInstancedMesh) && o !== sky && o !== marker && !o.userData.ug) SURF.push(o);
+  for (const o of scene.children) if ((o instanceof THREE.Mesh || o instanceof THREE.InstancedMesh) && o !== sky && o !== marker && !o.userData.ug) SURF.push(o);
 }
 function setSurface(on: any) : any {
   if (UG.surfHidden === !on) return;

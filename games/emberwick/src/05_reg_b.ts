@@ -315,7 +315,7 @@ function farOk(x: any, z: any, r: any = 2) : any {
   if (mountainH(x, z) > 0.8 || slopeAt(x, z) > 0.6) return false;
   if (inBuilding(x, z)) return false;
   for (const k of FAR_KEEP) if (Math.abs(x - k.x) < k.r + r && Math.abs(z - k.z) < k.r + r && Math.hypot(x - k.x, z - k.z) < k.r + r) return false;
-  for (const b of BUILDINGS) { const c: any = b.localY(0, 0, 0); if (Math.hypot(x - c.x, z - c.z) < (b.s.R ? b.s.R + 4 : Math.hypot(b.s.w, b.s.d) / 2 + 3)) return false; }
+  for (const b of BUILDINGS) { const c: any = b.localY(0, 0, 0); if (Math.hypot(x - c.x, z - c.z) < (b.s.R !== undefined ? b.s.R + 4 : Math.hypot(b.s.w, b.s.d) / 2 + 3)) return false; }
   return Math.hypot(x, z) > 52;
 }
 

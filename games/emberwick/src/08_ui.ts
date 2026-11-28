@@ -331,7 +331,8 @@ const UI: any = {
     for (const c of CANOPIES) { g.fillStyle = 'rgba(30,50,24,0.55)'; g.beginPath(); g.arc(...W(c.x, c.z), (c.r * 0.9) / S, 0, TAU); g.fill(); }
     for (const c of MAPDOTS) { g.fillStyle = c.c; g.beginPath(); g.arc(...W(c.x, c.z), c.r / S, 0, TAU); g.fill(); }
     for (const b of BUILDINGS) {
-      g.beginPath(); b.footprint.forEach((p: any, i: any) => { const q2: any = W(p[0], p[1]); if (i) g.lineTo(...q2); else g.moveTo(...q2); }); g.closePath();
+      if (!b.footprint) continue;
+      g.beginPath(); b.footprint.forEach((p, i) => { const q2: any = W(p[0], p[1]); if (i) g.lineTo(...q2); else g.moveTo(...q2); }); g.closePath();
       g.fillStyle = '#' + col(b.mapColor).getHexString(); g.fill();
       g.lineWidth = 2; g.strokeStyle = 'rgba(20,14,10,0.85)'; g.stroke();
     }

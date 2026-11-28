@@ -791,7 +791,7 @@ function scatterVegetation() : any {
   const trees: any = [];
   const ok: any = (x: any, z: any, r: any) => {
     if (grassBlocked(x, z)) return false;
-    for (const b of BUILDINGS) { const c: any = b.localY(0, 0, 0); if (Math.hypot(x - c.x, z - c.z) < (b.s.R ? b.s.R + 4 : Math.hypot(b.s.w, b.s.d) / 2 + 3)) return false; }
+    for (const b of BUILDINGS) { const c: any = b.localY(0, 0, 0); if (Math.hypot(x - c.x, z - c.z) < (b.s.R !== undefined ? b.s.R + 4 : Math.hypot(b.s.w, b.s.d) / 2 + 3)) return false; }
     if (riverDist(x, z) < 7.5) return false;
     if (mountainH(x, z) > 0.6 || slopeAt(x, z) > 0.5) return false;
     if (Math.hypot(x - MOUTH.x, z - MOUTH.z - 3) < 8) return false;
